@@ -46,7 +46,7 @@ export function ResourceDetails() {
   const { role } = useRole();
   const { user } = useAuth();
   const isDeptManager = useIsDepartmentLeader(user?.id);
-  const canEditCondition = role === 'admin' || role === 'owner' || role === 'approver' || isDeptManager;
+  const canEditCondition = role === 'admin' || role === 'approver' || isDeptManager;
   const [barcodes, setBarcodes] = useState<BarcodeRow[]>([]);
   const [barcodesLoading, setBarcodesLoading] = useState(false);
   const [newCode, setNewCode] = useState('');
