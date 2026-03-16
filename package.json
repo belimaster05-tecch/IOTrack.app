@@ -7,7 +7,10 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:onboarding": "tsx scripts/test-onboarding.ts",
+    "test:flow": "tsx scripts/test-flow.ts",
+    "test:flow:seed": "tsx scripts/test-flow.ts --seed"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
