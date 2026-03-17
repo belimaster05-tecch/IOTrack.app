@@ -72,7 +72,8 @@ export default function SetupPage() {
           .eq('id', user.id);
       }
 
-      router.push('/dashboard');
+      // Full reload so the middleware reads the refreshed session (updated has_password cookie)
+      window.location.href = '/dashboard';
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error al guardar.');
       setSaving(false);
