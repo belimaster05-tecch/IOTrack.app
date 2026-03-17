@@ -15,6 +15,26 @@ import { useFeatures } from '@/contexts/FeaturesContext';
 import { CATEGORY_ICON_LIST, getCategoryIconComponent } from '@/lib/categoryIcons';
 import { cn } from '@/lib/utils';
 
+/** Converts any browser-decodable image to a JPEG Blob (handles PNG, WebP, GIF, HEIC on Safari, etc.) */
+function toJpegBlob(file: File): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d')?.drawImage(img, 0, 0);
+      canvas.toBlob(
+        (blob) => { URL.revokeObjectURL(url); blob ? resolve(blob) : reject(new Error('No se pudo procesar la imagen.')); },
+        'image/jpeg', 0.88
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('No se pudo leer la imagen. Prueba con JPEG o PNG.')); };
+    img.src = url;
+  });
+}
+
 export function Settings() {
   const { user, refreshAuthState, organizationId } = useAuth();
   const { role } = useRole();
@@ -77,9 +97,10 @@ export function Settings() {
     }
     setAvatarUploading(true);
     try {
-      const ext = file.name.split('.').pop();
-      const path = `profiles/${user.id}/avatar.${ext}`;
-      const { error: uploadError } = await supabase.storage.from('Avatar').upload(path, file, { upsert: true, contentType: file.type });
+      // Always store as JPEG to avoid MIME-type issues (HEIC, BMP, etc.)
+      const jpegBlob = await toJpegBlob(file);
+      const path = `profiles/${user.id}/avatar.jpg`;
+      const { error: uploadError } = await supabase.storage.from('Avatar').upload(path, jpegBlob, { upsert: true, contentType: 'image/jpeg' });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from('Avatar').getPublicUrl(path);
       const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;

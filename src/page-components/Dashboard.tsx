@@ -201,8 +201,18 @@ export function Dashboard() {
   };
 
   const canAccessGestion = role === 'admin' || role === 'approver' || isDepartmentLeader;
+  const isEmployee = role === 'employee';
   const approvalQueue = allRequests.filter((r: any) => r.status === 'pending').filter((r: any) => canApproveRequest(r)).slice(0, 4);
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'Usuario';
+
+  // Employee-scoped metrics
+  const myLoans = loans.filter((l: any) => l.profiles?.id === user?.id);
+  const myActiveLoans = myLoans.filter((l: any) => l.status === 'active' || l.status === 'overdue');
+  const myOverdueLoans = myLoans.filter((l: any) => l.status === 'overdue');
+  const myRequests = allRequests.filter((r: any) => r.user_id === user?.id);
+  const myPendingRequests = myRequests.filter((r: any) => r.status === 'pending');
+  const myApprovedRequests = myRequests.filter((r: any) => r.status === 'approved');
+  const myDueToday = myLoans.filter((l: any) => l.due_date === todayIso);
 
   const scheduledRequests = useMemo(() => {
     return allRequests
@@ -406,7 +416,40 @@ export function Dashboard() {
         <motion.div variants={up} initial="hidden" animate="show" className="xl:col-span-8 space-y-4">
           <Card className="p-4 md:p-5 bg-white dark:bg-[#202020] shadow-none dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              {[
+              {(isEmployee ? [
+                {
+                  label: 'Mis préstamos',
+                  value: loadingLoans ? '—' : myActiveLoans.length,
+                  note: myDueToday.length > 0 ? `${myDueToday.length} vencen hoy` : 'Sin vencimientos hoy',
+                  tone: 'bg-[#EEF4FF] text-[#3159B8] dark:bg-[#1E2A40] dark:text-[#A7C0FF]',
+                  icon: Clock3,
+                  route: '/prestamos?status=active',
+                },
+                {
+                  label: 'Mis solicitudes',
+                  value: loadingRequests ? '—' : myPendingRequests.length,
+                  note: `${myApprovedRequests.length} aprobadas`,
+                  tone: 'bg-[#FEF4E8] text-[#B26B1B] dark:bg-[#3A2B1D] dark:text-[#F5C78F]',
+                  icon: ClipboardList,
+                  route: '/solicitudes',
+                },
+                {
+                  label: 'Recursos disponibles',
+                  value: loadingResources ? '—' : resources.filter((r: any) => (r.available_quantity ?? 0) > 0).length,
+                  note: 'En el catálogo ahora',
+                  tone: 'bg-[#F0F0EF] text-gray-600 dark:bg-[#1D1D1D] dark:text-[#C8C8C6]',
+                  icon: Package,
+                  route: '/recursos',
+                },
+                {
+                  label: 'Vencidos',
+                  value: loadingLoans ? '—' : myOverdueLoans.length,
+                  note: myOverdueLoans.length > 0 ? 'Devolver a la brevedad' : 'Sin atrasos',
+                  tone: 'bg-[#FCEFF2] text-[#B34D6D] dark:bg-[#3B222B] dark:text-[#F0A8BE]',
+                  icon: AlertTriangle,
+                  route: '/prestamos?status=overdue',
+                },
+              ] : [
                 {
                   label: 'Recursos activos',
                   value: loadingResources ? '—' : totalResources,
@@ -426,7 +469,7 @@ export function Dashboard() {
                 {
                   label: 'Pendientes',
                   value: loadingRequests ? '—' : pendingCount,
-                  note: canAccessGestion ? `${approvalQueue.length} para revisar` : 'Tus solicitudes activas',
+                  note: `${approvalQueue.length} para revisar`,
                   tone: 'bg-[#FEF4E8] text-[#B26B1B] dark:bg-[#3A2B1D] dark:text-[#F5C78F]',
                   icon: ClipboardList,
                   route: '/solicitudes',
@@ -439,7 +482,7 @@ export function Dashboard() {
                   icon: AlertTriangle,
                   route: '/prestamos?status=overdue',
                 },
-              ].map((item) => {
+              ]).map((item) => {
                 const Icon = item.icon;
                 return (
                   <button
@@ -664,7 +707,7 @@ export function Dashboard() {
               <div className="px-5 py-4 flex items-center justify-between">
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400 dark:text-[#555]">Actividad</p>
-                  <h2 className="mt-1 text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Últimos movimientos</h2>
+                  <h2 className="mt-1 text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">{isEmployee ? 'Tus movimientos' : 'Últimos movimientos'}</h2>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => router.push('/solicitudes')}>
                   Ver todo
@@ -709,7 +752,29 @@ export function Dashboard() {
                 </div>
               </div>
               <CardContent className="space-y-3">
-                {[
+                {(isEmployee ? [
+                  {
+                    label: 'Nueva solicitud',
+                    desc: 'Crear un pedido o préstamo programado',
+                    tone: 'bg-[#EEF4FF] text-[#3159B8] dark:bg-[#1E2A40] dark:text-[#A7C0FF]',
+                    icon: Plus,
+                    route: '/solicitar',
+                  },
+                  {
+                    label: 'Catálogo de recursos',
+                    desc: 'Ver qué recursos están disponibles',
+                    tone: 'bg-[#ECF8F1] text-[#257A4D] dark:bg-[#1B3325] dark:text-[#9ED8B4]',
+                    icon: Package,
+                    route: '/recursos',
+                  },
+                  {
+                    label: 'Escanear recurso',
+                    desc: 'Consultar o devolver con QR',
+                    tone: 'bg-[#F0F0EF] text-gray-600 dark:bg-[#1D1D1D] dark:text-[#C8C8C6]',
+                    icon: ScanLine,
+                    route: '/escanear',
+                  },
+                ] : [
                   {
                     label: 'Nueva solicitud',
                     desc: 'Crear un pedido o préstamo programado',
@@ -731,7 +796,7 @@ export function Dashboard() {
                     icon: FileText,
                     route: '/reportes',
                   },
-                ].map((action) => {
+                ]).map((action) => {
                   const Icon = action.icon;
                   return (
                     <button
@@ -904,7 +969,7 @@ export function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="bg-white dark:bg-[#202020] shadow-none dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+          {!isEmployee && <Card className="bg-white dark:bg-[#202020] shadow-none dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
             <div className="px-5 py-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400 dark:text-[#555]">Monitoreo</p>
               <h2 className="mt-1 text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Alertas suaves</h2>
@@ -937,7 +1002,7 @@ export function Dashboard() {
                 ))
               )}
             </CardContent>
-          </Card>
+          </Card>}
         </motion.div>
       </div>
     </div>
