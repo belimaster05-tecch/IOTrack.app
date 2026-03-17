@@ -80,12 +80,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // Use SECURITY DEFINER RPC — bypasses RLS entirely, avoids silent failures
       // when auth.uid() isn't attached to the JWT during brief post-login race conditions.
-      const { data: ctx, error: ctxError } = await supabase.rpc('get_my_context');
+      let { data: ctx, error: ctxError } = await supabase.rpc('get_my_context');
+
+      // Retry once after 800ms — handles brief post-login JWT propagation delays
+      if ((ctxError || !ctx) && mountedRef.current) {
+        await new Promise(r => setTimeout(r, 800));
+        const retry = await supabase.rpc('get_my_context');
+        ctx = retry.data;
+        ctxError = retry.error;
+      }
 
       if (!mountedRef.current) return;
 
       if (ctxError || !ctx) {
-        // RPC not available yet — fall back to direct queries
+        // RPC still not available — fall back to direct queries
         const [profileResult, membershipsResult] = await Promise.all([
           supabase.from('profiles').select('*').eq('id', currentUser.id).single(),
           supabase
@@ -157,8 +165,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setOrganizationLogoUrl(ctx.org_logo_url ?? null);
       setMembershipRole((membership?.role as MembershipRole | undefined) || (fallbackRole as MembershipRole | null));
     } catch {
+      // Don't reset state on transient errors — the session is still valid.
+      // The user will see stale data rather than being logged out unexpectedly.
       if (!mountedRef.current) return;
-      resetUserState();
     }
   }, [resetUserState]);
 

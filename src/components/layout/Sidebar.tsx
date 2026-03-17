@@ -69,8 +69,8 @@ function NavItem({ icon: Icon, label, to, onClick }: { icon: React.ElementType; 
 }
 
 export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () => void }) {
-  const { role, loading: roleLoading } = useRole();
-  const { user, profile, signOut, loading: authLoading, organizationLogoUrl } = useAuth();
+  const { role } = useRole();
+  const { user, profile, signOut, organizationLogoUrl } = useAuth();
   const { theme, toggle } = useTheme();
   const { features } = useFeatures();
   const orgName = profile?.organizations?.name ?? 'InvTrack';
@@ -81,8 +81,6 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
   const allNavItems = canAccessGestion ? adminNavItems : employeeNavItems;
   const navItems = allNavItems.filter((n) => !n.feature || features[n.feature]);
   const visibleManagementItems = managementItems.filter((n) => !n.feature || features[n.feature]);
-
-  const isLoading = authLoading || roleLoading;
 
   const roleLabel =
     role === 'admin' ? 'Administrador'
@@ -152,13 +150,7 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
 
         {/* Nav */}
         <div className="flex-1 overflow-y-auto px-3 py-2 space-y-5">
-          {isLoading ? (
-            <div className="space-y-1 px-1 pt-1">
-              {[...Array(4)].map((_, i) => (
-                <div key={i} className="h-8 rounded-lg bg-gray-100 dark:bg-[#252525] animate-pulse" />
-              ))}
-            </div>
-          ) : (
+          {(
             <>
               <motion.div variants={container} initial="hidden" animate="show">
                 <p className="px-3 text-[10px] font-semibold text-gray-300 dark:text-[#444] uppercase tracking-widest mb-1.5">Principal</p>
