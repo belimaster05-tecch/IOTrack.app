@@ -33,7 +33,7 @@ type SegmentFilter = 'catalogo' | 'internos' | 'asignados' | 'todos';
 
 const segmentCopy: Record<SegmentFilter, { label: string; descAdmin: string; descEmployee: string }> = {
   catalogo: {
-    label: 'Catálogo',
+    label: 'Público',
     descAdmin: 'Recursos públicos disponibles para solicitud.',
     descEmployee: 'Recursos disponibles para solicitar.',
   },
@@ -223,7 +223,7 @@ export function Resources() {
               <p className="mt-1 text-xs font-mono text-gray-500 dark:text-[#787774]">{resource.sku}</p>
             </div>
             <span className="rounded-full bg-[#F3F4F6] px-2 py-1 text-[11px] font-medium text-gray-700 dark:bg-[#1D1D1D] dark:text-[#C8C8C6]">
-              {resource.type === 'consumable' ? 'Bulk' : 'Serie'}
+              {resource.type === 'consumable' ? 'Bulk' : resource.type === 'instalado' ? 'Fijo' : resource.type === 'servicio' ? 'Servicio' : 'Serie'}
             </span>
           </div>
 
@@ -274,7 +274,7 @@ export function Resources() {
           </div>
 
           <div className="mt-5 flex items-center gap-2">
-            {isAssigned || isInternal ? (
+            {isAssigned || isInternal || resource.type === 'instalado' || resource.type === 'servicio' ? (
               <Button variant="secondary" className="w-full bg-[#F3F4F6] dark:bg-[#1D1D1D]" onClick={(e) => {
                 e.stopPropagation();
                 router.push(`/recursos/${resource.id}`);

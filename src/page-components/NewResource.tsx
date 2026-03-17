@@ -38,7 +38,7 @@ function NewResourceInner() {
   const [locationId, setLocationId] = useState<string>('');
   const [departmentId, setDepartmentId] = useState<string>('');
   const [department, setDepartment] = useState('');
-  const [resourceType, setResourceType] = useState<'reusable' | 'consumable'>('reusable');
+  const [resourceType, setResourceType] = useState<'reusable' | 'consumable' | 'instalado' | 'servicio'>('reusable');
   const [requiresApproval, setRequiresApproval] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -350,8 +350,10 @@ function NewResourceInner() {
                     onChange={(e) => setResourceType(e.target.value as any)}
                     className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
                   >
-                    <option value="reusable">Reusable (Activo fijo)</option>
-                    <option value="consumable">Consumible</option>
+                    <option value="reusable">Serie (activo con unidades numeradas)</option>
+                    <option value="consumable">Consumible (stock en bulk)</option>
+                    <option value="instalado">Instalado (fijo, no prestable)</option>
+                    <option value="servicio">Servicio (suscripción o servicio externo)</option>
                   </select>
                 </div>
                 <div>
@@ -371,7 +373,7 @@ function NewResourceInner() {
                   {errors.quantity && <p className="text-red-500 dark:text-red-400 text-xs mt-1.5">{errors.quantity}</p>}
                 </div>
 
-                {resourceType === 'reusable' && (
+                {(resourceType === 'reusable') && (
                   <div className="bg-gray-50 dark:bg-[#1D1D1D] p-4 rounded-xl mt-4">
                     <h3 className="text-xs font-bold text-gray-900 dark:text-[#E8E8E6] mb-3 flex items-center gap-2">
                       <Layers className="w-3 h-3" /> Generación de Unidades
@@ -407,7 +409,7 @@ function NewResourceInner() {
               </div>
 
               <div className="space-y-4">
-                {resourceType === 'reusable' && parseInt(quantity) > 0 && (
+                {(resourceType === 'reusable') && parseInt(quantity) > 0 && (
                   <div className="bg-gray-50 dark:bg-[#1D1D1D] rounded-xl p-4">
                     <h3 className="text-xs font-bold text-gray-900 dark:text-[#E8E8E6] mb-3 flex items-center gap-2">
                       <Layers className="w-3 h-3" /> Vista Previa de Nuevas Unidades

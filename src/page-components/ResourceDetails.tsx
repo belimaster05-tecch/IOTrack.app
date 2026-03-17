@@ -77,6 +77,19 @@ export function ResourceDetails() {
   const [creatingTag, setCreatingTag] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
+  const { tags: orgTags, refetch: refetchOrgTags } = useConditionTags();
+
+  // Sync local tag ids and notes draft when resource loads
+  useEffect(() => {
+    if (!resource) return;
+    setLocalTagIds(
+      (resource.resource_condition_tags || [])
+        .map((rct: any) => rct.condition_tags?.id)
+        .filter(Boolean)
+    );
+    setNotesDraft(resource.condition_notes || '');
+  }, [resource?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [resourceActivity, setResourceActivity] = useState<any[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [scheduleEntries, setScheduleEntries] = useState<any[]>([]);
@@ -448,19 +461,6 @@ export function ResourceDetails() {
       setAdjustingStock(false);
     }
   };
-
-  const { tags: orgTags, refetch: refetchOrgTags } = useConditionTags();
-
-  // Sync local tag ids and notes draft when resource loads
-  useEffect(() => {
-    if (!resource) return;
-    setLocalTagIds(
-      (resource.resource_condition_tags || [])
-        .map((rct: any) => rct.condition_tags?.id)
-        .filter(Boolean)
-    );
-    setNotesDraft(resource.condition_notes || '');
-  }, [resource?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleToggleTag = async (tagId: string) => {
     const isSelected = localTagIds.includes(tagId);
