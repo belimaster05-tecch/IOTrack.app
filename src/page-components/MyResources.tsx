@@ -108,10 +108,11 @@ export function MyResources() {
   const [loadingConsumables, setLoadingConsumables] = useState(true);
 
   // Personal lending state
-  const [assignedUnits, setAssignedUnits] = useState<any[]>([]);
   const [personalLoans, setPersonalLoans] = useState<any[]>([]);
   const [loadingPersonal, setLoadingPersonal] = useState(true);
-  const [lendModal, setLendModal] = useState<{ open: boolean; unit: any | null }>({ open: false, unit: null });
+  const [lendModal, setLendModal] = useState<{ open: boolean; resource: any | null }>({ open: false, resource: null });
+  const [lendUnitId, setLendUnitId] = useState('');
+  const [modalUnits, setModalUnits] = useState<any[]>([]);
   const [lendBorrowerId, setLendBorrowerId] = useState('');
   const [lendDueDate, setLendDueDate] = useState('');
   const [lendNotes, setLendNotes] = useState('');
@@ -142,26 +143,29 @@ export function MyResources() {
     fetchConsumableActivity();
   }, [user?.id]);
 
+  const refreshPersonalLoans = async () => {
+    if (!user?.id) return;
+    const { data } = await supabase
+      .from('loans')
+      .select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)')
+      .eq('lender_user_id', user.id)
+      .neq('status', 'returned')
+      .order('due_date', { ascending: true });
+    setPersonalLoans(data ?? []);
+  };
+
   useEffect(() => {
     const fetchPersonalData = async () => {
       if (!user?.id) { setLoadingPersonal(false); return; }
       setLoadingPersonal(true);
       try {
-        const [unitsRes, loansRes] = await Promise.all([
-          supabase
-            .from('resource_units')
-            .select('id, serial_number, status, resource_id, resources(name, sku, locations(name))')
-            .eq('assigned_to_user_id', user.id)
-            .eq('status', 'available'),
-          supabase
-            .from('loans')
-            .select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)')
-            .eq('lender_user_id', user.id)
-            .neq('status', 'returned')
-            .order('due_date', { ascending: true }),
-        ]);
-        setAssignedUnits(unitsRes.data ?? []);
-        setPersonalLoans(loansRes.data ?? []);
+        const { data } = await supabase
+          .from('loans')
+          .select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)')
+          .eq('lender_user_id', user.id)
+          .neq('status', 'returned')
+          .order('due_date', { ascending: true });
+        setPersonalLoans(data ?? []);
       } finally {
         setLoadingPersonal(false);
       }
@@ -169,12 +173,27 @@ export function MyResources() {
     fetchPersonalData();
   }, [user?.id]);
 
+  const openLendModal = async (resource: any) => {
+    setLendModal({ open: true, resource });
+    setLendBorrowerId('');
+    setLendDueDate('');
+    setLendNotes('');
+    setLendUnitId('');
+    const { data } = await supabase
+      .from('resource_units')
+      .select('id, serial_number')
+      .eq('resource_id', resource.id)
+      .eq('status', 'available');
+    setModalUnits(data ?? []);
+    if (data?.length === 1) setLendUnitId(data[0].id);
+  };
+
   const handleLendUnit = async () => {
-    if (!lendModal.unit || !lendBorrowerId || !lendDueDate || !user?.id) return;
+    if (!lendModal.resource || !lendBorrowerId || !lendDueDate || !user?.id) return;
     setLendSubmitting(true);
     try {
       const { error } = await supabase.from('loans').insert({
-        unit_id: lendModal.unit.id,
+        unit_id: lendUnitId || null,
         user_id: lendBorrowerId,
         lender_user_id: user.id,
         start_date: new Date().toISOString().split('T')[0],
@@ -185,17 +204,8 @@ export function MyResources() {
       });
       if (error) throw error;
       toast.success('Préstamo registrado');
-      setLendModal({ open: false, unit: null });
-      setLendBorrowerId('');
-      setLendDueDate('');
-      setLendNotes('');
-      // Refresh personal data
-      const [unitsRes, loansRes] = await Promise.all([
-        supabase.from('resource_units').select('id, serial_number, status, resource_id, resources(name, sku, locations(name))').eq('assigned_to_user_id', user.id).eq('status', 'available'),
-        supabase.from('loans').select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)').eq('lender_user_id', user.id).neq('status', 'returned').order('due_date', { ascending: true }),
-      ]);
-      setAssignedUnits(unitsRes.data ?? []);
-      setPersonalLoans(loansRes.data ?? []);
+      setLendModal({ open: false, resource: null });
+      await refreshPersonalLoans();
     } catch (err: any) {
       toast.error('Error al registrar préstamo: ' + err.message);
     } finally {
@@ -208,12 +218,7 @@ export function MyResources() {
       const { error } = await supabase.from('loans').update({ status: 'returned', return_date: new Date().toISOString().split('T')[0] }).eq('id', loanId);
       if (error) throw error;
       toast.success('Préstamo marcado como devuelto');
-      const [unitsRes, loansRes] = await Promise.all([
-        supabase.from('resource_units').select('id, serial_number, status, resource_id, resources(name, sku, locations(name))').eq('assigned_to_user_id', user!.id).eq('status', 'available'),
-        supabase.from('loans').select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)').eq('lender_user_id', user!.id).neq('status', 'returned').order('due_date', { ascending: true }),
-      ]);
-      setAssignedUnits(unitsRes.data ?? []);
-      setPersonalLoans(loansRes.data ?? []);
+      await refreshPersonalLoans();
     } catch (err: any) {
       toast.error('Error: ' + err.message);
     }
@@ -551,16 +556,18 @@ export function MyResources() {
               filteredAssignedResources.map((resource) => (
                 <Card
                   key={resource.id}
-                  className={cn('cursor-pointer p-4 shadow-none transition-colors', COLUMN_STYLES.assigned.card)}
-                  onClick={() => router.push(`/recursos/${resource.id}`)}
+                  className={cn('p-4 shadow-none transition-colors', COLUMN_STYLES.assigned.card)}
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <div
+                    className="flex items-start justify-between gap-3 cursor-pointer"
+                    onClick={() => router.push(`/recursos/${resource.id}`)}
+                  >
                     <div className="min-w-0">
                       <h3 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource.name}</h3>
                       <p className="mt-1 text-xs text-gray-600 dark:text-[#AAAAAA]">{resource.sku}</p>
                     </div>
                     <Badge variant="warm" className="border-transparent bg-white/70 text-gray-700 dark:bg-white/10 dark:text-[#F7C978]">
-                      {getCatalogVisibility(resource) === 'internal' ? 'Fijo' : 'Area'}
+                      {getCatalogVisibility(resource) === 'internal' ? 'Fijo' : 'Área'}
                     </Badge>
                   </div>
                   <div className="mt-3 space-y-2">
@@ -571,6 +578,13 @@ export function MyResources() {
                     )}
                     {resource.owner_name && <p className="text-xs text-gray-600 dark:text-[#AAAAAA]">Asignado a: {resource.owner_name}</p>}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => openLendModal(resource)}
+                    className="mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
+                  >
+                    <Send className="h-3 w-3" /> Prestar a un compañero
+                  </button>
                 </Card>
               ))
             )}
@@ -590,36 +604,10 @@ export function MyResources() {
           </button>
           {!collapsedSections.lending && (
             <div className="space-y-3">
-              {/* Assigned units that can be lent */}
-              {assignedUnits.length > 0 && (
-                <div className="space-y-2">
-                  <p className="px-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-[#555]">Unidades disponibles para prestar</p>
-                  {assignedUnits.map((unit) => (
-                    <Card key={unit.id} className="p-3 shadow-none bg-[#F7F7F6] dark:bg-white/[0.04]">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6] truncate">{unit.resources?.name ?? 'Recurso'}</p>
-                          <p className="text-xs text-gray-400 dark:text-[#555]">{unit.serial_number}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => { setLendModal({ open: true, unit }); setLendBorrowerId(''); setLendDueDate(''); setLendNotes(''); }}
-                          className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
-                        >
-                          <Send className="h-3 w-3" /> Prestar
-                        </button>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              )}
-              {/* Active personal loans */}
               {loadingPersonal ? (
                 <EmptyColumn text="Cargando préstamos..." />
-              ) : personalLoans.length === 0 && assignedUnits.length === 0 ? (
-                <EmptyColumn text="No tienes unidades asignadas para prestar." />
               ) : personalLoans.length === 0 ? (
-                <EmptyColumn text="No hay préstamos activos." />
+                <EmptyColumn text="Usa el botón 'Prestar' en tus recursos asignados." />
               ) : (
                 personalLoans.map((loan) => {
                   const isOverdue = loan.status === 'overdue' || (loan.due_date && loan.due_date < new Date().toISOString().split('T')[0]);
@@ -956,9 +944,29 @@ export function MyResources() {
           <div className="bg-white dark:bg-[#242424] rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5">
             <div>
               <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Prestar recurso</h2>
-              <p className="text-sm text-gray-500 dark:text-[#787774] mt-1">{lendModal.unit?.resources?.name} · {lendModal.unit?.serial_number}</p>
+              <p className="text-sm text-gray-500 dark:text-[#787774] mt-1">{lendModal.resource?.name}</p>
             </div>
             <div className="space-y-4">
+              {modalUnits.length > 1 && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Unidad a prestar *</label>
+                  <select
+                    value={lendUnitId}
+                    onChange={(e) => setLendUnitId(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                  >
+                    <option value="">Seleccionar unidad...</option>
+                    {modalUnits.map((u) => (
+                      <option key={u.id} value={u.id}>{u.serial_number}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {modalUnits.length === 1 && (
+                <p className="text-xs text-gray-500 dark:text-[#787774] bg-gray-50 dark:bg-[#1D1D1D] px-3 py-2 rounded-lg">
+                  Unidad: <span className="font-mono font-semibold">{modalUnits[0].serial_number}</span>
+                </p>
+              )}
               <div>
                 <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Prestar a *</label>
                 <select
@@ -996,7 +1004,7 @@ export function MyResources() {
             <div className="flex gap-3 pt-1">
               <button
                 type="button"
-                onClick={() => setLendModal({ open: false, unit: null })}
+                onClick={() => setLendModal({ open: false, resource: null })}
                 className="flex-1 h-9 rounded-lg border border-gray-200 dark:border-[#333] text-sm text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-100 dark:hover:bg-[#2A2A2A] transition-colors"
               >
                 Cancelar
@@ -1004,7 +1012,7 @@ export function MyResources() {
               <button
                 type="button"
                 onClick={handleLendUnit}
-                disabled={!lendBorrowerId || !lendDueDate || lendSubmitting}
+                disabled={!lendBorrowerId || !lendDueDate || (modalUnits.length > 1 && !lendUnitId) || lendSubmitting}
                 className="flex-1 h-9 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
               >
                 {lendSubmitting ? 'Registrando...' : 'Confirmar préstamo'}
