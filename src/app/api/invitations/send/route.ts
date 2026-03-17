@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const token = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const redirectTo = `${appUrl}/invitacion/${token}`;
+    const redirectTo = `${appUrl}/auth/callback?next=/invitacion/${token}`;
 
     // Insert invitation record
     const { error: insertError } = await supabaseAdmin.from('invitations').insert({

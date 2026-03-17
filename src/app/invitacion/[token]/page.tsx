@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
 
-type Status = 'loading' | 'success' | 'needs_login' | 'expired' | 'already_member' | 'error';
+type Status = 'loading' | 'success' | 'needs_login' | 'link_sent' | 'expired' | 'already_member' | 'error';
 
 export default function InvitacionPage() {
   const params = useParams();
@@ -14,7 +14,11 @@ export default function InvitacionPage() {
   const [status, setStatus] = useState<Status>('loading');
   const [orgName, setOrgName] = useState('');
   const [message, setMessage] = useState('');
+  const [email, setEmail] = useState('');
+  const [sendingLink, setSendingLink] = useState(false);
+  const [linkError, setLinkError] = useState('');
   const done = useRef(false);
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
 
   useEffect(() => {
     if (!token) return;
@@ -53,7 +57,6 @@ export default function InvitacionPage() {
           setStatus('already_member');
           setTimeout(() => router.push(hasPassword ? '/dashboard' : '/setup'), 2000);
         } else {
-          // Invitation token not valid for this user
           setStatus('needs_login');
         }
         return;
@@ -82,22 +85,14 @@ export default function InvitacionPage() {
       setTimeout(() => router.push('/setup'), 2500);
     }
 
-    // ── 3. Check for PKCE code in query string ────────────────────────────────
-    const code = new URLSearchParams(window.location.search).get('code');
-    if (code) {
-      supabase.auth.exchangeCodeForSession(code).catch(() => {});
-      // Will fire SIGNED_IN via onAuthStateChange below
-    }
-
-    // ── 4. Check immediately for an existing session (fast path) ──────────────
-    // Safe to call here because we already ruled out hash tokens above.
+    // ── 3. Check immediately for an existing session (fast path) ──────────────
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user && !done.current) {
         onAuthenticated();
       }
     });
 
-    // ── 5. Also listen for new auth events (hash token auto-login) ────────────
+    // ── 4. Also listen for new auth events ────────────────────────────────────
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         subscription.unsubscribe();
@@ -105,7 +100,7 @@ export default function InvitacionPage() {
       }
     });
 
-    // ── 6. Fallback: no session after 4s → show login options ─────────────────
+    // ── 5. Fallback: no session after 4s → show login options ─────────────────
     const fallback = setTimeout(() => {
       if (!done.current) setStatus('needs_login');
     }, 4000);
@@ -116,31 +111,23 @@ export default function InvitacionPage() {
     };
   }, [token, router]);
 
-  // ── Shared invitation CTA used in multiple screens ─────────────────────────
-  const LoginOptions = ({ hint }: { hint?: string }) => (
-    <div className="space-y-3 w-full">
-      {hint && <p className="text-sm text-gray-500 dark:text-[#787774]">{hint}</p>}
-      <Link
-        href={`/login?next=/invitacion/${token}`}
-        className="block w-full py-2.5 px-4 rounded-lg bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors text-center"
-      >
-        Iniciar sesión
-      </Link>
-      <Link
-        href={`/register?next=/invitacion/${token}`}
-        className="block w-full py-2.5 px-4 rounded-lg border border-gray-200 dark:border-[#3A3A3A] text-gray-700 dark:text-[#C8C8C6] text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#2A2A2A] transition-colors text-center"
-      >
-        Crear cuenta nueva
-      </Link>
-      <p className="text-xs text-gray-400 dark:text-[#555] text-center">
-        ¿Sin contraseña aún?{' '}
-        <Link href={`/login?next=/invitacion/${token}`} className="underline hover:text-gray-600 dark:hover:text-gray-300">
-          Usa "¿Olvidaste tu contraseña?"
-        </Link>{' '}
-        para establecer una.
-      </p>
-    </div>
-  );
+  const handleSendLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setSendingLink(true);
+    setLinkError('');
+    const redirectTo = `${appUrl}/auth/callback?next=/invitacion/${token}`;
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+    });
+    setSendingLink(false);
+    if (error) {
+      setLinkError('No se pudo enviar el enlace. Verifica que el correo sea el correcto.');
+    } else {
+      setStatus('link_sent');
+    }
+  };
 
   // ── SCREENS ────────────────────────────────────────────────────────────────
 
@@ -158,15 +145,60 @@ export default function InvitacionPage() {
   if (status === 'expired') {
     return (
       <Screen icon="clock" color="amber" title="Enlace expirado">
-        <LoginOptions hint="El enlace del correo venció, pero tu invitación sigue activa. Inicia sesión o crea una cuenta para unirte." />
+        <p className="text-sm text-gray-500 dark:text-[#787774]">El enlace del correo venció. Ingresa tu correo para recibir uno nuevo.</p>
+        <SendLinkForm
+          email={email}
+          setEmail={setEmail}
+          onSubmit={handleSendLink}
+          loading={sendingLink}
+          error={linkError}
+        />
+        <div className="w-full border-t border-gray-100 dark:border-[#3A3A3A]" />
+        <Link
+          href={`/login?next=/invitacion/${token}`}
+          className="block w-full py-2.5 px-4 rounded-lg border border-gray-200 dark:border-[#3A3A3A] text-gray-700 dark:text-[#C8C8C6] text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#2A2A2A] transition-colors text-center"
+        >
+          Ya tengo contraseña — Iniciar sesión
+        </Link>
       </Screen>
     );
   }
 
   if (status === 'needs_login') {
     return (
-      <Screen icon="mail" color="emerald" title="Acepta tu invitación">
-        <LoginOptions hint="Inicia sesión o crea una cuenta para unirte a la organización." />
+      <Screen icon="mail" color="emerald" title="Configura tu acceso">
+        <p className="text-sm text-gray-500 dark:text-[#787774]">
+          Ingresa el correo al que llegó la invitación y te enviaremos un enlace para acceder.
+        </p>
+        <SendLinkForm
+          email={email}
+          setEmail={setEmail}
+          onSubmit={handleSendLink}
+          loading={sendingLink}
+          error={linkError}
+        />
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-gray-100 dark:bg-[#3A3A3A]" />
+          <span className="text-xs text-gray-400 dark:text-[#555]">o</span>
+          <div className="flex-1 h-px bg-gray-100 dark:bg-[#3A3A3A]" />
+        </div>
+        <Link
+          href={`/login?next=/invitacion/${token}`}
+          className="block w-full py-2.5 px-4 rounded-lg border border-gray-200 dark:border-[#3A3A3A] text-gray-700 dark:text-[#C8C8C6] text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#2A2A2A] transition-colors text-center"
+        >
+          Ya tengo contraseña — Iniciar sesión
+        </Link>
+      </Screen>
+    );
+  }
+
+  if (status === 'link_sent') {
+    return (
+      <Screen icon="mail" color="emerald" title="Revisa tu correo">
+        <p className="text-sm text-gray-500 dark:text-[#787774]">
+          Enviamos un enlace de acceso a <span className="font-medium text-gray-900 dark:text-[#E8E8E6]">{email}</span>. Haz clic en él para continuar.
+        </p>
+        <p className="text-xs text-gray-400 dark:text-[#555]">Puede tardar unos segundos. Revisa también spam.</p>
       </Screen>
     );
   }
@@ -208,6 +240,38 @@ export default function InvitacionPage() {
         Ir al login
       </Link>
     </Screen>
+  );
+}
+
+// ── Send link form ─────────────────────────────────────────────────────────
+function SendLinkForm({
+  email, setEmail, onSubmit, loading, error,
+}: {
+  email: string;
+  setEmail: (v: string) => void;
+  onSubmit: (e: React.FormEvent) => void;
+  loading: boolean;
+  error: string;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-2 w-full">
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="tu@correo.com"
+        required
+        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-[#3A3A3A] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] placeholder:text-gray-400 dark:placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      />
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full py-2.5 px-4 rounded-lg bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-50"
+      >
+        {loading ? 'Enviando…' : 'Enviarme enlace de acceso'}
+      </button>
+    </form>
   );
 }
 
