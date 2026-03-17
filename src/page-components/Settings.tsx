@@ -6,7 +6,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
-import { useCategories, useDepartments, useLocations, useResources } from '@/lib/hooks';
+import { useCategories, useDepartments, useLocations, useResources, useConditionTags } from '@/lib/hooks';
+import { TAG_COLORS, TAG_COLOR_KEYS } from '@/lib/conditionTags';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRole } from '@/contexts/RoleContext';
@@ -29,6 +30,7 @@ export function Settings() {
   const { departments, loading: loadingDepartments, refetchDepartments } = useDepartments();
   const { locations } = useLocations();
   const { resources } = useResources();
+  const { tags: conditionTags, loading: loadingTags, refetch: refetchTags } = useConditionTags();
 
   // Settings state
   const [profileData, setProfileData] = useState<any>(null);
@@ -36,6 +38,7 @@ export function Settings() {
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [fullName, setFullName] = useState('');
   const [orgName, setOrgName] = useState('');
+  const [orgWebsite, setOrgWebsite] = useState('');
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -46,7 +49,7 @@ export function Settings() {
   useEffect(() => {
     if(!user) return;
     const loadData = async () => {
-      const { data } = await supabase.from('profiles').select('*, organizations(name, logo_url)').eq('id', user.id).single();
+      const { data } = await supabase.from('profiles').select('*, organizations(name, logo_url, website)').eq('id', user.id).single();
       if(data) {
         setProfileData(data);
         setFullName(data.full_name || user.user_metadata?.full_name || '');
@@ -54,6 +57,7 @@ export function Settings() {
           setOrgData(data.organizations);
           setOrgName((data.organizations as any).name || '');
           setOrgLogoUrl((data.organizations as any).logo_url ?? null);
+          setOrgWebsite((data.organizations as any).website || '');
         }
       }
     };
@@ -74,8 +78,8 @@ export function Settings() {
     setAvatarUploading(true);
     try {
       const ext = file.name.split('.').pop();
-      const path = `${user.id}/${Date.now()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from('Avatar').upload(path, file, { upsert: true });
+      const path = `profiles/${user.id}/avatar.${ext}`;
+      const { error: uploadError } = await supabase.storage.from('Avatar').upload(path, file, { upsert: true, contentType: file.type });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from('Avatar').getPublicUrl(path);
       const publicUrl = urlData.publicUrl;
@@ -140,7 +144,7 @@ export function Settings() {
     setSavingGlobal(true);
     try {
       if(activeTab === 'general' && profileData?.organization_id) {
-         const { error } = await supabase.from('organizations').update({name: orgName}).eq('id', profileData.organization_id);
+         const { error } = await supabase.from('organizations').update({ name: orgName, website: orgWebsite || null }).eq('id', profileData.organization_id);
          if(error) throw error;
          toast.success('Configuración general guardada correctamente.');
       }
@@ -282,6 +286,68 @@ export function Settings() {
     const { error } = await supabase.from('departments').delete().eq('id', id);
     if (error) toast.error('Error al eliminar: ' + error.message);
     else refetchDepartments();
+  };
+
+  // Condition Tags state
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('gray');
+  const [addingTag, setAddingTag] = useState(false);
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [editingTagName, setEditingTagName] = useState('');
+  const [editingTagColor, setEditingTagColor] = useState('gray');
+  const [savingTag, setSavingTag] = useState(false);
+  const [deletingTagId, setDeletingTagId] = useState<string | null>(null);
+
+  const handleCreateTag = async () => {
+    if (!newTagName.trim() || !user) return;
+    setSavingTag(true);
+    try {
+      const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+      if (!profile?.organization_id) throw new Error('Sin organización');
+      const { error } = await supabase.from('condition_tags').insert({ name: newTagName.trim(), color: newTagColor, organization_id: profile.organization_id });
+      if (error) throw error;
+      setNewTagName('');
+      setNewTagColor('gray');
+      setAddingTag(false);
+      refetchTags();
+      toast.success('Etiqueta creada');
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    } finally {
+      setSavingTag(false);
+    }
+  };
+
+  const handleUpdateTag = async () => {
+    if (!editingTagId || !editingTagName.trim()) return;
+    setSavingTag(true);
+    try {
+      const { error } = await supabase.from('condition_tags').update({ name: editingTagName.trim(), color: editingTagColor }).eq('id', editingTagId);
+      if (error) throw error;
+      setEditingTagId(null);
+      refetchTags();
+      toast.success('Etiqueta actualizada');
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    } finally {
+      setSavingTag(false);
+    }
+  };
+
+  const handleDeleteTag = async (id: string) => {
+    if (!window.confirm('¿Eliminar esta etiqueta? Se quitará de todos los recursos que la usen.')) return;
+    setDeletingTagId(id);
+    try {
+      await supabase.from('resource_condition_tags').delete().eq('tag_id', id);
+      const { error } = await supabase.from('condition_tags').delete().eq('id', id);
+      if (error) throw error;
+      refetchTags();
+      toast.success('Etiqueta eliminada');
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    } finally {
+      setDeletingTagId(null);
+    }
   };
 
   const handlePasswordChange = async () => {
@@ -610,6 +676,146 @@ export function Settings() {
                   </div>
                 </div>
               </Card>
+
+              {/* Condition Tags */}
+              <Card className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-[#E8E8E6]">Etiquetas de Estado</h3>
+                    <p className="text-sm text-gray-500 dark:text-[#787774]">Etiquetas para clasificar el estado o condición de los recursos.</p>
+                  </div>
+                  {!addingTag && (
+                    <Button variant="secondary" className="bg-white dark:bg-[#242424] text-sm h-9" onClick={() => setAddingTag(true)}>
+                      <Plus className="w-4 h-4 mr-2" /> Nueva Etiqueta
+                    </Button>
+                  )}
+                </div>
+
+                {addingTag && (
+                  <div className="mb-4 rounded-xl border border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/50 dark:bg-emerald-900/10 p-4 space-y-3">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#C8C8C6]">Nueva etiqueta</p>
+                    <input
+                      type="text"
+                      value={newTagName}
+                      onChange={e => setNewTagName(e.target.value)}
+                      placeholder="Nombre de la etiqueta"
+                      autoFocus
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-[#3A3A3A] bg-white dark:bg-[#2A2A2A] text-sm text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-[#787774] mb-2">Color</p>
+                      <div className="flex flex-wrap gap-2">
+                        {TAG_COLOR_KEYS.map(c => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setNewTagColor(c)}
+                            className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all border-2', TAG_COLORS[c].bg, TAG_COLORS[c].text, newTagColor === c ? 'border-current' : 'border-transparent')}
+                          >
+                            <span className={cn('w-2 h-2 rounded-full', TAG_COLORS[c].dot)} />
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="primary" className="h-8 text-sm" onClick={handleCreateTag} disabled={savingTag || !newTagName.trim()}>
+                        {savingTag ? 'Guardando…' : 'Crear'}
+                      </Button>
+                      <Button variant="secondary" className="h-8 text-sm bg-white dark:bg-[#242424]" onClick={() => { setAddingTag(false); setNewTagName(''); setNewTagColor('gray'); }}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="border border-gray-200 dark:border-[#3A3A3A] rounded-lg overflow-hidden">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-50 dark:bg-[#1D1D1D] text-gray-600 dark:text-[#AAAAAA] font-medium border-b border-gray-200 dark:border-[#3A3A3A]">
+                      <tr>
+                        <th className="px-4 py-3">Etiqueta</th>
+                        <th className="px-4 py-3">Color</th>
+                        <th className="px-4 py-3 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-[#3A3A3A] bg-white dark:bg-[#242424]">
+                      {loadingTags ? (
+                        <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-500 dark:text-[#787774]">Cargando…</td></tr>
+                      ) : conditionTags.length === 0 ? (
+                        <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-500 dark:text-[#787774]">No hay etiquetas. Crea la primera.</td></tr>
+                      ) : conditionTags.map(tag =>
+                        editingTagId === tag.id ? (
+                          <tr key={tag.id} className="bg-emerald-50/50 dark:bg-emerald-900/10">
+                            <td className="px-4 py-2.5">
+                              <input
+                                type="text"
+                                value={editingTagName}
+                                onChange={e => setEditingTagName(e.target.value)}
+                                autoFocus
+                                className="w-full px-2 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-[#2A2A2A] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex flex-wrap gap-1.5">
+                                {TAG_COLOR_KEYS.map(c => (
+                                  <button
+                                    key={c}
+                                    type="button"
+                                    onClick={() => setEditingTagColor(c)}
+                                    title={c}
+                                    className={cn('w-5 h-5 rounded-full border-2 transition-all', TAG_COLORS[c].dot, editingTagColor === c ? 'border-gray-700 dark:border-white scale-110' : 'border-transparent')}
+                                  />
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={handleUpdateTag}
+                                  disabled={savingTag}
+                                  className="px-3 py-1 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer"
+                                >
+                                  {savingTag ? '…' : 'Guardar'}
+                                </button>
+                                <button onClick={() => setEditingTagId(null)} className="px-3 py-1 text-xs rounded-md bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-200 dark:hover:bg-[#444] transition-colors cursor-pointer">
+                                  Cancelar
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={tag.id} className="hover:bg-gray-50 dark:hover:bg-[#2A2A2A]">
+                            <td className="px-4 py-3">
+                              <span className={cn('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium', TAG_COLORS[tag.color]?.bg ?? 'bg-gray-100 dark:bg-gray-800', TAG_COLORS[tag.color]?.text ?? 'text-gray-600')}>
+                                <span className={cn('w-1.5 h-1.5 rounded-full', TAG_COLORS[tag.color]?.dot ?? 'bg-gray-400')} />
+                                {tag.name}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-gray-500 dark:text-[#787774] capitalize">{tag.color}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => { setEditingTagId(tag.id); setEditingTagName(tag.name); setEditingTagColor(tag.color); }}
+                                  className="p-1.5 text-gray-400 dark:text-[#555] hover:text-gray-900 dark:hover:text-[#E8E8E6] rounded-md hover:bg-gray-100 dark:hover:bg-[#333] transition-colors cursor-pointer"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTag(tag.id)}
+                                  disabled={deletingTagId === tag.id}
+                                  className="p-1.5 text-gray-400 dark:text-[#555] hover:text-red-600 dark:hover:text-red-400 rounded-md hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-50 cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
             </div>
           )}
 
@@ -678,7 +884,7 @@ export function Settings() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium text-gray-700 dark:text-[#C8C8C6]">Sitio Web</label>
-                      <input type="text" defaultValue="https://techcorp.com" disabled className="w-full px-3 py-2 bg-gray-50 dark:bg-[#1D1D1D] border border-gray-200 dark:border-[#3A3A3A] rounded-lg text-sm dark:text-[#787774] focus:outline-none cursor-not-allowed" />
+                      <input type="url" value={orgWebsite} onChange={e => setOrgWebsite(e.target.value)} placeholder="https://miempresa.com" className="w-full px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-200 dark:border-[#3A3A3A] rounded-lg text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent placeholder:text-gray-400 dark:placeholder:text-[#555]" />
                     </div>
                   </div>
                 </div>

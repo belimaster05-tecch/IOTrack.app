@@ -446,7 +446,7 @@ export function Dashboard() {
                     key={item.label}
                     type="button"
                     onClick={() => router.push(item.route)}
-                    className="group rounded-[22px] bg-[#F8F8F7] dark:bg-[#262626] p-4 text-left transition-all hover:-translate-y-0.5 hover:bg-white dark:hover:bg-[#2B2B2B]"
+                    className="group cursor-pointer rounded-[22px] bg-[#F8F8F7] dark:bg-[#262626] p-4 text-left transition-all hover:-translate-y-0.5 hover:bg-white dark:hover:bg-[#2B2B2B]"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className={cn('inline-flex h-10 w-10 items-center justify-center rounded-2xl', item.tone)}>
@@ -855,7 +855,7 @@ export function Dashboard() {
                     disabled={!cell.iso}
                     onClick={() => cell.iso && setSelectedCalendarDate(cell.iso)}
                     className={cn(
-                      'aspect-square rounded-2xl flex flex-col items-center justify-center text-sm transition-colors',
+                      'aspect-square cursor-pointer rounded-2xl flex flex-col items-center justify-center text-sm transition-colors',
                       !cell.iso && 'opacity-0',
                       cell.iso && 'bg-[#F5F5F4] dark:bg-[#252525] hover:bg-white dark:hover:bg-[#2C2C2C]',
                       cell.isSelected && 'ring-2 ring-[#3159B8]/50 dark:ring-[#A7C0FF]/45',

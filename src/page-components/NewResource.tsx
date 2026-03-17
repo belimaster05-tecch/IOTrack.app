@@ -2,15 +2,17 @@
 import { useState, useRef, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ChevronRight, Upload, Save, X, Image as ImageIcon, RefreshCw, AlertCircle, Layers } from 'lucide-react';
+import { ChevronRight, Save, X, Image as ImageIcon, RefreshCw, Layers } from 'lucide-react';
+import { TAG_COLORS } from '@/lib/conditionTags';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { CustomSelect } from '@/components/ui/CustomSelect';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { uploadResourceImage } from '@/lib/storage';
-import { useCategories, useLocations, useDepartments, useUsers } from '@/lib/hooks';
+import { useCategories, useLocations, useDepartments, useUsers, useConditionTags } from '@/lib/hooks';
 import type { CatalogVisibility } from '@/lib/resourceVisibility';
 import { getCategoryIconComponent } from '@/lib/categoryIcons';
 
@@ -24,11 +26,13 @@ function NewResourceInner() {
   const { locations, loading: locationsLoading } = useLocations();
   const { departments, loading: departmentsLoading } = useDepartments();
   const { users } = useUsers(null);
+  const { tags: orgTags } = useConditionTags();
   const [name, setName] = useState('');
   const [sku, setSku] = useState('');
   const [category, setCategory] = useState(''); // This will store the UUID
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState('1');
+  const [warehouseQuantity, setWarehouseQuantity] = useState('0');
   const [unitPrefix, setUnitPrefix] = useState('');
   const [unitStartNumber, setUnitStartNumber] = useState('1');
   const [ownershipType, setOwnershipType] = useState('general');
@@ -37,14 +41,38 @@ function NewResourceInner() {
   const [ownerUserId, setOwnerUserId] = useState<string>('');
   const [locationId, setLocationId] = useState<string>('');
   const [departmentId, setDepartmentId] = useState<string>('');
-  const [department, setDepartment] = useState('');
-  const [resourceType, setResourceType] = useState<'reusable' | 'consumable' | 'instalado' | 'servicio'>('reusable');
+  const [trackingMode, setTrackingMode] = useState<'reusable' | 'consumable'>('reusable');
+  const [behavior, setBehavior] = useState<'prestable' | 'instalado' | 'servicio' | 'gastable'>('prestable');
   const [requiresApproval, setRequiresApproval] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showAllCategories, setShowAllCategories] = useState(false);
 
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [existingUnits, setExistingUnits] = useState<any[]>([]);
+  const [unitAssignments, setUnitAssignments] = useState<Record<string, string>>({}); // edit mode: unit_id → user_id
+  const [pendingAssignments, setPendingAssignments] = useState<Record<number, string>>({}); // create mode: unit_index → user_id
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-adjustments when behavior or ownershipType changes
+  useEffect(() => {
+    if (behavior === 'instalado') {
+      if (catalogVisibility === 'public') setCatalogVisibility('restricted');
+    }
+  }, [behavior]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (behavior === 'servicio' || behavior === 'gastable') {
+      setTrackingMode('consumable');
+    }
+  }, [behavior]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (ownershipType === 'personal') {
+      setCatalogVisibility('restricted');
+    }
+  }, [ownershipType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (editId) {
@@ -60,16 +88,39 @@ function NewResourceInner() {
           setSku(data.sku || '');
           setDescription(data.description || '');
           setQuantity((data.initial_quantity || 1).toString());
+          setWarehouseQuantity((data.warehouse_quantity ?? 0).toString());
           setOwnershipType(data.ownership_type || 'general');
           setCatalogVisibility((data.catalog_visibility as CatalogVisibility) || (data.ownership_type === 'personal' ? 'restricted' : data.ownership_type === 'area' ? 'restricted' : 'public'));
           setOwnerName(data.owner_name || '');
           if (data.owner_user_id) setOwnerUserId(data.owner_user_id);
-          setResourceType(data.type || 'reusable');
+          setTrackingMode(data.type === 'consumable' ? 'consumable' : 'reusable');
+          setBehavior((data.behavior as any) || 'prestable');
           setRequiresApproval(data.requires_approval !== false);
           if (data.image_url) setImagePreview(data.image_url);
           if (data.category_id) setCategory(data.category_id);
           if (data.location_id) setLocationId(data.location_id);
           if (data.department_id) setDepartmentId(data.department_id);
+
+          // Fetch existing units for assignment
+          const { data: unitData } = await supabase
+            .from('resource_units')
+            .select('id, serial_number, status, assigned_to_user_id')
+            .eq('resource_id', editId)
+            .order('serial_number');
+          if (unitData) {
+            setExistingUnits(unitData);
+            const assignments: Record<string, string> = {};
+            unitData.forEach((u: any) => {
+              if (u.assigned_to_user_id) assignments[u.id] = u.assigned_to_user_id;
+            });
+            setUnitAssignments(assignments);
+          }
+
+          const { data: tagData } = await supabase
+            .from('resource_condition_tags')
+            .select('tag_id')
+            .eq('resource_id', editId);
+          if (tagData) setSelectedTagIds(tagData.map((t: any) => t.tag_id));
 
           if (data.sku) {
             const parts = data.sku.split('-');
@@ -132,11 +183,13 @@ function NewResourceInner() {
         name,
         sku: finalSku,
         description,
-        type: resourceType,
+        type: trackingMode,
+        behavior,
         category_id: category || null,
         location_id: locationId || null,
         department_id: departmentId || null,
         initial_quantity: parseInt(quantity),
+        warehouse_quantity: trackingMode === 'consumable' ? (parseInt(warehouseQuantity) || 0) : 0,
         ownership_type: ownershipType,
         catalog_visibility: catalogVisibility,
         owner_name: ownerName,
@@ -171,7 +224,7 @@ function NewResourceInner() {
 
       let generatedUnitsCount = 0;
       // 4. Create Resource Units for reusable items
-      if (resourceType === 'reusable' && existingResource) {
+      if (trackingMode === 'reusable' && existingResource) {
         const startNum = parseInt(unitStartNumber) || 1;
         const prefix = unitPrefix || existingResource.sku.split('-')[0] || 'ITM';
 
@@ -194,13 +247,18 @@ function NewResourceInner() {
         }
 
         if (unitsToGenerate > 0) {
-          const units = Array.from({ length: unitsToGenerate }).map((_, i) => ({
-            resource_id: existingResource.id,
-            organization_id: profile.organization_id,
-            serial_number: `${prefix}-${(startNum + i).toString().padStart(3, '0')}`,
-            status: 'available',
-            condition: 'new'
-          }));
+          const units = Array.from({ length: unitsToGenerate }).map((_, i) => {
+            const assignedUserId = !editId ? (pendingAssignments[i] || null) : null;
+            return {
+              resource_id: existingResource.id,
+              organization_id: profile.organization_id,
+              serial_number: `${prefix}-${(startNum + i).toString().padStart(3, '0')}`,
+              status: 'available',
+              condition: 'new',
+              assigned_to_user_id: assignedUserId || null,
+              assigned_at: assignedUserId ? new Date().toISOString() : null,
+            };
+          });
 
           const { error: unitsError } = await supabase
             .from('resource_units')
@@ -223,6 +281,27 @@ function NewResourceInner() {
           .from('resources')
           .update({ image_url: imageUrl })
           .eq('id', resourceId);
+      }
+
+      // Save condition tags
+      if (resourceId) {
+        await supabase.from('resource_condition_tags').delete().eq('resource_id', resourceId);
+        if (selectedTagIds.length > 0) {
+          await supabase.from('resource_condition_tags').insert(
+            selectedTagIds.map((tag_id) => ({ resource_id: resourceId, tag_id }))
+          );
+        }
+      }
+
+      // Save unit assignments
+      if (editId && Object.keys(unitAssignments).length >= 0 && existingUnits.length > 0) {
+        for (const unit of existingUnits) {
+          const assignedUserId = unitAssignments[unit.id] || null;
+          await supabase.from('resource_units').update({
+            assigned_to_user_id: assignedUserId || null,
+            assigned_at: assignedUserId ? new Date().toISOString() : null,
+          }).eq('id', unit.id);
+        }
       }
 
       router.push('/recursos');
@@ -297,30 +376,43 @@ function NewResourceInner() {
                     <div className="flex gap-2">
                       {[1, 2, 3].map(i => <div key={i} className="w-24 h-10 bg-gray-100 dark:bg-[#2A2A2A] animate-pulse rounded-xl" />)}
                     </div>
-                  ) : categories.map((cat) => {
-                    const Icon = getCategoryIconComponent(cat.icon_name);
-                    return (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => {
-                          setCategory(cat.id);
-                          if (errors.category) setErrors({ ...errors, category: '' });
-                        }}
-                        className={cn(
-                          "flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition-all",
-                          category === cat.id
-                            ? "border-gray-900 bg-gray-900 text-white shadow-md"
-                            : errors.category
-                              ? "border-red-300 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400 hover:border-red-400"
-                              : "border-gray-200 dark:border-[#3A3A3A] bg-white dark:bg-[#242424] text-gray-700 dark:text-[#C8C8C6] hover:border-gray-300 dark:hover:border-[#444] hover:bg-gray-50 dark:hover:bg-[#2A2A2A] hover:shadow-sm"
-                        )}
-                      >
-                        <Icon className={cn("w-4 h-4", category === cat.id ? "text-white" : errors.category ? "text-red-500 dark:text-red-400" : "text-gray-500 dark:text-[#787774]")} />
-                        {cat.name}
-                      </button>
-                    );
-                  })}
+                  ) : (
+                    <>
+                      {(showAllCategories ? categories : categories.slice(0, 6)).map((cat) => {
+                        const Icon = getCategoryIconComponent(cat.icon_name);
+                        return (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => {
+                              setCategory(cat.id);
+                              if (errors.category) setErrors({ ...errors, category: '' });
+                            }}
+                            className={cn(
+                              "flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition-all cursor-pointer",
+                              category === cat.id
+                                ? "border-gray-900 bg-gray-900 text-white shadow-md"
+                                : errors.category
+                                  ? "border-red-300 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400 hover:border-red-400"
+                                  : "border-gray-200 dark:border-[#3A3A3A] bg-white dark:bg-[#242424] text-gray-700 dark:text-[#C8C8C6] hover:border-gray-300 dark:hover:border-[#444] hover:bg-gray-50 dark:hover:bg-[#2A2A2A] hover:shadow-sm"
+                            )}
+                          >
+                            <Icon className={cn("w-4 h-4", category === cat.id ? "text-white" : errors.category ? "text-red-500 dark:text-red-400" : "text-gray-500 dark:text-[#787774]")} />
+                            {cat.name}
+                          </button>
+                        );
+                      })}
+                      {categories.length > 6 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllCategories((s) => !s)}
+                          className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-dashed border-gray-300 dark:border-[#3A3A3A] text-sm font-medium text-gray-400 dark:text-[#555] hover:border-gray-400 dark:hover:border-[#555] hover:text-gray-600 dark:hover:text-[#787774] transition-all cursor-pointer"
+                        >
+                          {showAllCategories ? '↑ Ver menos' : `+${categories.length - 6} más`}
+                        </button>
+                      )}
+                    </>
+                  )}
                 </div>
                 {errors.category && <p className="text-red-500 dark:text-red-400 text-xs mt-1.5">{errors.category}</p>}
               </div>
@@ -344,21 +436,34 @@ function NewResourceInner() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Tipo de recurso</label>
-                  <select
-                    value={resourceType}
-                    onChange={(e) => setResourceType(e.target.value as any)}
-                    className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
-                  >
-                    <option value="reusable">Serie (activo con unidades numeradas)</option>
-                    <option value="consumable">Consumible (stock en bulk)</option>
-                    <option value="instalado">Instalado (fijo, no prestable)</option>
-                    <option value="servicio">Servicio (suscripción o servicio externo)</option>
-                  </select>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Comportamiento del recurso</label>
+                  <CustomSelect
+                    value={behavior}
+                    onChange={(v) => setBehavior(v as 'prestable' | 'instalado' | 'servicio' | 'gastable')}
+                    options={[
+                      { value: 'prestable', label: 'Reutilizable', description: 'Se puede solicitar, reservar y prestar — se devuelve después de usar' },
+                      { value: 'gastable', label: 'Gastable', description: 'Se consume al usarse, descuenta del stock (papelería, tornillos, consumibles…)' },
+                      { value: 'instalado', label: 'Instalado / Fijo', description: 'Permanente en su lugar, no se presta (proyectores, impresoras…)' },
+                      { value: 'servicio', label: 'Servicio / Licencia', description: 'Suscripción o servicio externo (Adobe, Zoom, Notion…)' },
+                    ]}
+                  />
                 </div>
+                {behavior !== 'servicio' && behavior !== 'gastable' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Modo de seguimiento</label>
+                    <CustomSelect
+                      value={trackingMode}
+                      onChange={(v) => setTrackingMode(v as 'reusable' | 'consumable')}
+                      options={[
+                        { value: 'reusable', label: 'En serie', description: 'Unidades individuales numeradas (laptops, cámaras, tablets…)' },
+                        { value: 'consumable', label: 'A granel', description: 'Stock sin número de serie (papelería, tornillos, consumibles…)' },
+                      ]}
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">
-                    {resourceType === 'reusable' ? 'Cantidad inicial *' : 'Stock actual *'}
+                    {trackingMode === 'reusable' ? 'Cantidad inicial *' : 'Stock público *'}
                   </label>
                   <Input
                     type="number"
@@ -373,7 +478,20 @@ function NewResourceInner() {
                   {errors.quantity && <p className="text-red-500 dark:text-red-400 text-xs mt-1.5">{errors.quantity}</p>}
                 </div>
 
-                {(resourceType === 'reusable') && (
+                {trackingMode === 'consumable' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Stock almacén</label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={warehouseQuantity}
+                      onChange={(e) => setWarehouseQuantity(e.target.value)}
+                    />
+                    <p className="text-xs text-gray-400 dark:text-[#555] mt-1">Solo visible para el administrador</p>
+                  </div>
+                )}
+
+                {trackingMode === 'reusable' && behavior !== 'servicio' && behavior !== 'gastable' && (
                   <div className="bg-gray-50 dark:bg-[#1D1D1D] p-4 rounded-xl mt-4">
                     <h3 className="text-xs font-bold text-gray-900 dark:text-[#E8E8E6] mb-3 flex items-center gap-2">
                       <Layers className="w-3 h-3" /> Generación de Unidades
@@ -409,23 +527,35 @@ function NewResourceInner() {
               </div>
 
               <div className="space-y-4">
-                {(resourceType === 'reusable') && parseInt(quantity) > 0 && (
+                {trackingMode === 'reusable' && behavior !== 'servicio' && behavior !== 'gastable' && parseInt(quantity) > 0 && !editId && (
                   <div className="bg-gray-50 dark:bg-[#1D1D1D] rounded-xl p-4">
                     <h3 className="text-xs font-bold text-gray-900 dark:text-[#E8E8E6] mb-3 flex items-center gap-2">
-                      <Layers className="w-3 h-3" /> Vista Previa de Nuevas Unidades
+                      <Layers className="w-3 h-3" /> Unidades a crear
                     </h3>
-                    <div className="space-y-2 max-h-[120px] overflow-y-auto pr-2 custom-scrollbar">
-                      {Array.from({ length: Math.min(parseInt(quantity), 5) }).map((_, i) => (
-                        <div key={i} className="flex items-center justify-between text-[11px] py-1 border-b border-gray-200 dark:border-[#3A3A3A] last:border-0">
-                          <span className="font-mono text-gray-600 dark:text-[#AAAAAA]">
-                            {(unitPrefix || 'RES')}-{(parseInt(unitStartNumber) || 1 + i).toString().padStart(3, '0')}
-                          </span>
-                          <Badge variant="neutral" className="text-[9px] px-1.5 py-0">Disponible</Badge>
-                        </div>
-                      ))}
-                      {parseInt(quantity) > 5 && (
-                        <p className="text-[10px] text-gray-400 dark:text-[#555] italic text-center pt-1">+ {parseInt(quantity) - 5} unidades más...</p>
-                      )}
+                    <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                      {Array.from({ length: parseInt(quantity) }).map((_, i) => {
+                        const serial = `${(unitPrefix || 'RES')}-${((parseInt(unitStartNumber) || 1) + i).toString().padStart(3, '0')}`;
+                        return (
+                          <div key={i} className="flex items-center gap-3 py-1.5 border-b border-gray-200 dark:border-[#3A3A3A] last:border-0">
+                            <span className="font-mono text-[11px] w-24 shrink-0 text-gray-700 dark:text-[#C8C8C6]">{serial}</span>
+                            {behavior === 'instalado' && ownershipType !== 'personal' ? (
+                              <div className="flex-1">
+                                <CustomSelect
+                                  value={pendingAssignments[i] || ''}
+                                  onChange={(uid) => setPendingAssignments((prev) => ({ ...prev, [i]: uid }))}
+                                  placeholder="Sin asignar"
+                                  options={[
+                                    { value: '', label: 'Sin asignar' },
+                                    ...users.map((u: any) => ({ value: u.id, label: u.full_name || u.email })),
+                                  ]}
+                                />
+                              </div>
+                            ) : (
+                              <Badge variant="success" className="text-[10px] px-2 py-0.5">Disponible</Badge>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -437,6 +567,39 @@ function NewResourceInner() {
               </div>
             </div>
           </div>
+
+          {/* Unit assignment — only in edit mode */}
+          {editId && existingUnits.length > 0 && (
+            <div className="bg-white dark:bg-[#242424] p-6 rounded-xl shadow-sm space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Asignación de Unidades</h2>
+                <p className="text-xs text-gray-400 dark:text-[#555] mt-1">Asigna cada unidad a un miembro de la organización.</p>
+              </div>
+              <div className="space-y-3">
+                {existingUnits.map((unit) => (
+                  <div key={unit.id} className="flex items-center gap-4 py-2 border-b border-gray-100 dark:border-[#2A2A2A] last:border-0">
+                    <div className="w-28 shrink-0">
+                      <p className="text-xs font-mono font-bold text-gray-700 dark:text-[#C8C8C6]">{unit.serial_number}</p>
+                      <p className="text-[10px] text-gray-400 dark:text-[#555] mt-0.5">
+                        {unit.status === 'available' ? 'Disponible' : unit.status === 'on_loan' ? 'Prestado' : 'Mantenimiento'}
+                      </p>
+                    </div>
+                    <div className="flex-1">
+                      <CustomSelect
+                        value={unitAssignments[unit.id] || ''}
+                        onChange={(uid) => setUnitAssignments((prev) => ({ ...prev, [unit.id]: uid }))}
+                        placeholder="Sin asignar"
+                        options={[
+                          { value: '', label: 'Sin asignar' },
+                          ...users.map((u: any) => ({ value: u.id, label: u.full_name || u.email })),
+                        ]}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Column: Media & Organization */}
@@ -477,21 +640,56 @@ function NewResourceInner() {
             </div>
           </div>
 
+          {/* Condition Tags */}
+          <div className="bg-white dark:bg-[#242424] p-6 rounded-xl shadow-sm space-y-3">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Estado / Etiquetas</h2>
+            {orgTags.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-[#555]">No hay etiquetas creadas. Puedes crearlas desde la ficha de un recurso.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {orgTags.map((tag: any) => {
+                  const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
+                  const isSelected = selectedTagIds.includes(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() =>
+                        setSelectedTagIds((prev) =>
+                          isSelected ? prev.filter((id) => id !== tag.id) : [...prev, tag.id]
+                        )
+                      }
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition border',
+                        isSelected
+                          ? cn(c.bg, c.text, 'border-current')
+                          : 'bg-gray-50 dark:bg-[#1D1D1D] border-gray-200 dark:border-[#333] text-gray-600 dark:text-[#787774] hover:border-gray-300 dark:hover:border-[#444]'
+                      )}
+                    >
+                      <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', isSelected ? c.dot : 'bg-gray-300 dark:bg-[#555]')} />
+                      {tag.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Organization */}
           <div className="bg-white dark:bg-[#242424] p-6 rounded-xl shadow-sm space-y-4">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Ubicación y Propiedad</h2>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Tipo de Propiedad *</label>
-              <select
+              <CustomSelect
                 value={ownershipType}
-                onChange={(e) => setOwnershipType(e.target.value)}
-                className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
-              >
-                <option value="general">General (catálogo público)</option>
-                <option value="area">Por área / aula</option>
-                <option value="personal">Asignado a persona</option>
-              </select>
+                onChange={setOwnershipType}
+                options={[
+                  { value: 'general', label: 'General', description: 'Visible en el catálogo público para todos' },
+                  { value: 'area', label: 'Por área / aula', description: 'Vinculado a un aula o área específica' },
+                  { value: 'personal', label: 'Asignado a persona', description: 'Solo visible para el asignado y administradores' },
+                ]}
+              />
               <p className="mt-1.5 text-xs text-gray-500 dark:text-[#787774]">
                 La propiedad describe a quién pertenece el recurso. La visibilidad de catálogo se define abajo.
               </p>
@@ -499,17 +697,17 @@ function NewResourceInner() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Visibilidad en catálogo *</label>
-              <select
+              <CustomSelect
                 value={catalogVisibility}
-                onChange={(e) => setCatalogVisibility(e.target.value as CatalogVisibility)}
-                className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
-              >
-                <option value="public">Público en catálogo</option>
-                <option value="restricted">Visible por área / asignado</option>
-                <option value="internal">Solo administración</option>
-              </select>
+                onChange={(v) => setCatalogVisibility(v as CatalogVisibility)}
+                options={[
+                  { value: 'public', label: 'Público en catálogo', description: 'Aparece para todos los usuarios' },
+                  { value: 'restricted', label: 'Visible por área / asignado', description: 'Solo visible para el asignado o área' },
+                  { value: 'internal', label: 'Solo administración', description: 'Oculto para usuarios normales' },
+                ]}
+              />
               <p className="mt-1.5 text-xs text-gray-500 dark:text-[#787774]">
-                Publico aparece para todos, restringido queda como activo asignado y solo administracion queda oculto para usuarios normales.
+                Público aparece para todos, restringido queda como activo asignado y solo administración queda oculto para usuarios normales.
               </p>
             </div>
 
@@ -518,21 +716,19 @@ function NewResourceInner() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">
                   Usuario asignado *
                 </label>
-                <select
+                <CustomSelect
                   value={ownerUserId}
-                  onChange={(e) => {
-                    const uid = e.target.value;
+                  onChange={(uid) => {
                     setOwnerUserId(uid);
                     const u = users.find((u: any) => u.id === uid);
                     setOwnerName(u?.full_name || '');
                   }}
-                  className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
-                >
-                  <option value="">Sin asignar</option>
-                  {users.map((u: any) => (
-                    <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
-                  ))}
-                </select>
+                  placeholder="Sin asignar"
+                  options={[
+                    { value: '', label: 'Sin asignar' },
+                    ...users.map((u: any) => ({ value: u.id, label: u.full_name || u.email })),
+                  ]}
+                />
                 <p className="mt-1.5 text-xs text-gray-500 dark:text-[#787774]">
                   Solo esta persona y los administradores podrán ver el recurso.
                 </p>
@@ -554,58 +750,62 @@ function NewResourceInner() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Departamento (área de la organización)</label>
-                <select
+                <CustomSelect
                   value={departmentId}
-                  onChange={(e) => setDepartmentId(e.target.value)}
-                  className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
-                >
-                  <option value="">Sin asignar</option>
-                  {departmentsLoading ? (
-                    <option disabled>Cargando...</option>
-                  ) : (
-                    departments.map((d: { id: string; name: string }) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))
-                  )}
-                </select>
+                  onChange={setDepartmentId}
+                  placeholder={departmentsLoading ? 'Cargando...' : 'Sin asignar'}
+                  disabled={departmentsLoading}
+                  options={[
+                    { value: '', label: 'Sin asignar' },
+                    ...departments.map((d: { id: string; name: string }) => ({ value: d.id, label: d.name })),
+                  ]}
+                />
                 <p className="text-[10px] text-gray-400 dark:text-[#555] mt-0.5">Distinto de Categoría: aquí es el departamento que gestiona el recurso.</p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">Ubicación de almacenamiento</label>
-                <select
-                  value={locationId}
-                  onChange={(e) => setLocationId(e.target.value)}
-                  className="w-full h-10 px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow font-medium"
-                >
-                  <option value="">Sin asignar</option>
-                  {locationsLoading ? (
-                    <option disabled>Cargando...</option>
-                  ) : (
-                    locations.filter((loc: { is_reservable?: boolean }) => !loc.is_reservable).map((loc: { id: string; name: string }) => (
-                      <option key={loc.id} value={loc.id}>{loc.name}</option>
-                    ))
-                  )}
-                </select>
-                <p className="text-[10px] text-gray-400 dark:text-[#555] mt-0.5">Dónde se guarda y se devuelve el recurso. Siempre visible para el usuario.</p>
-              </div>
-            </div>
-            <div className="pt-4">
-              <label className="flex items-center justify-between cursor-pointer group">
+              {behavior !== 'servicio' && (
                 <div>
-                  <span className="block text-sm font-bold text-gray-900 dark:text-[#E8E8E6] group-hover:text-black dark:group-hover:text-white transition-colors">Requiere Aprobación</span>
-                  <span className="block text-[10px] text-gray-400 dark:text-[#555] font-medium mt-0.5 leading-tight pr-4">Si está desactivado, las solicitudes se aprobarán automáticamente.</span>
-                </div>
-                <div className="relative inline-flex items-center">
-                  <input
-                    type="checkbox"
-                    className="sr-only peer"
-                    checked={requiresApproval}
-                    onChange={(e) => setRequiresApproval(e.target.checked)}
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">
+                    {behavior === 'instalado' ? 'Espacio donde está instalado' : 'Ubicación de almacenamiento'}
+                  </label>
+                  <CustomSelect
+                    value={locationId}
+                    onChange={setLocationId}
+                    placeholder={locationsLoading ? 'Cargando...' : 'Sin asignar'}
+                    disabled={locationsLoading}
+                    options={[
+                      { value: '', label: 'Sin asignar' },
+                      ...locations
+                        .filter((loc: { is_reservable?: boolean }) => !loc.is_reservable)
+                        .map((loc: { id: string; name: string }) => ({ value: loc.id, label: loc.name })),
+                    ]}
                   />
-                  <div className="w-11 h-6 bg-gray-200 dark:bg-[#333] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div>
+                  <p className="text-[10px] text-gray-400 dark:text-[#555] mt-0.5">
+                    {behavior === 'instalado'
+                      ? 'El espacio físico donde está instalado permanentemente (aula, sala, oficina…).'
+                      : 'Dónde se guarda y se devuelve el recurso. Siempre visible para el usuario.'}
+                  </p>
                 </div>
-              </label>
+              )}
             </div>
+            {behavior !== 'instalado' && (
+              <div className="pt-4">
+                <label className="flex items-center justify-between cursor-pointer group">
+                  <div>
+                    <span className="block text-sm font-bold text-gray-900 dark:text-[#E8E8E6] group-hover:text-black dark:group-hover:text-white transition-colors">Requiere Aprobación</span>
+                    <span className="block text-[10px] text-gray-400 dark:text-[#555] font-medium mt-0.5 leading-tight pr-4">Si está desactivado, las solicitudes se aprobarán automáticamente.</span>
+                  </div>
+                  <div className="relative inline-flex items-center">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={requiresApproval}
+                      onChange={(e) => setRequiresApproval(e.target.checked)}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 dark:bg-[#333] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div>
+                  </div>
+                </label>
+              </div>
+            )}
           </div>
         </div>
       </form>

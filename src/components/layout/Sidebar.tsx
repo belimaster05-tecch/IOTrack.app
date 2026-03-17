@@ -114,13 +114,13 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
         <div className="px-4 pt-5 pb-3">
           <div className="flex items-center gap-2.5 px-1 mb-5">
             {organizationLogoUrl ? (
-              <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0 border border-gray-100 dark:border-[#333]">
+              <div className="h-7 max-w-[96px] rounded-lg overflow-hidden shrink-0 border border-gray-100 dark:border-[#333] bg-white dark:bg-[#111] flex items-center justify-center px-1">
                 <Image
                   src={organizationLogoUrl}
                   alt={orgName}
-                  width={28}
+                  width={96}
                   height={28}
-                  className="w-full h-full object-cover"
+                  className="h-6 w-auto object-contain"
                   unoptimized
                 />
               </div>
@@ -143,7 +143,7 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
             <input
               type="text"
               placeholder="Buscar..."
-              className="w-full h-8 pl-8 pr-3 rounded-lg bg-gray-50 border border-gray-100 dark:bg-[#252525] dark:border-[#333] dark:text-[#C8C8C6] dark:placeholder-[#555] focus:border-gray-200 dark:focus:border-[#444] focus:bg-white dark:focus:bg-[#2A2A2A] focus:outline-none text-xs transition-all"
+              className="w-full h-8 pl-8 pr-3 rounded-lg bg-gray-50 border border-gray-100 dark:bg-[#252525] dark:border-[#333] dark:text-[#C8C8C6] dark:placeholder-[#555] focus:border-gray-200 dark:focus:border-[#444] focus:bg-white dark:focus:bg-[#2A2A2A] focus:outline-none text-xs transition-all cursor-text"
             />
           </div>
         </div>

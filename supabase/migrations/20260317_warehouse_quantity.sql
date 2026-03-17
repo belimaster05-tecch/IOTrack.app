@@ -1,0 +1,2 @@
+ALTER TABLE resources
+  ADD COLUMN IF NOT EXISTS warehouse_quantity INTEGER NOT NULL DEFAULT 0;

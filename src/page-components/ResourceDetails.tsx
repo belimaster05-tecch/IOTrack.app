@@ -3,11 +3,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ChevronRight, Printer, CheckCircle2, ArrowRight, AlertCircle, Layers, Building2, Laptop, Palette, FlaskConical, Ruler, ScanLine, Plus, Trash2, X, CalendarDays, Clock3, History, Upload, FileText, BarChart3, Download, ExternalLink } from 'lucide-react';
+import { ChevronRight, Printer, CheckCircle2, ArrowRight, AlertCircle, Layers, Building2, Laptop, Palette, FlaskConical, Ruler, ScanLine, Plus, Trash2, X, CalendarDays, Clock3, History, Upload, FileText, BarChart3, Download, ExternalLink, UserRound } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
-import { useResource, useConditionTags, useIsDepartmentLeader } from '@/lib/hooks';
+import { useResource, useConditionTags, useIsDepartmentLeader, useUsers } from '@/lib/hooks';
 import { TAG_COLORS, TAG_COLOR_KEYS } from '@/lib/conditionTags';
 import { useRole } from '@/contexts/RoleContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -47,6 +47,7 @@ export function ResourceDetails() {
   const { user } = useAuth();
   const isDeptManager = useIsDepartmentLeader(user?.id);
   const canEditCondition = role === 'admin' || role === 'approver' || isDeptManager;
+  const { users } = useUsers(null);
   const [barcodes, setBarcodes] = useState<BarcodeRow[]>([]);
   const [barcodesLoading, setBarcodesLoading] = useState(false);
   const [newCode, setNewCode] = useState('');
@@ -66,6 +67,10 @@ export function ResourceDetails() {
   const [stockQuantity, setStockQuantity] = useState('0');
   const [adjustingStock, setAdjustingStock] = useState(false);
   const [stockError, setStockError] = useState<string | null>(null);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferQuantity, setTransferQuantity] = useState('1');
+  const [transferring, setTransferring] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
   const [visibilityLoading, setVisibilityLoading] = useState(false);
   // Condition tag editor state
   const [isConditionOpen, setIsConditionOpen] = useState(false);
@@ -341,7 +346,7 @@ export function ResourceDetails() {
   }
 
   const Icon = CAT_ICONS[resource.categories?.name] || Layers;
-  const isReusable = resource.type === 'reusable';
+  const isReusable = resource.type === 'reusable'|| (!resource.behavior && resource.type !== 'consumable');
   const nextUnitNumber = units.reduce((max, unit) => {
     const match = unit.serial_number?.match(/(\d+)$/);
     const numeric = match ? Number(match[1]) : 0;
@@ -436,6 +441,55 @@ export function ResourceDetails() {
     }
   };
 
+  const openTransferModal = () => {
+    setTransferQuantity('1');
+    setTransferError(null);
+    setTransferModalOpen(true);
+  };
+
+  const handleTransferToPublic = async () => {
+    if (!id || !resource) return;
+    const n = Number.parseInt(transferQuantity, 10);
+    const currentWarehouse = resource.warehouse_quantity ?? 0;
+    const currentPublic = resource.initial_quantity ?? 0;
+    if (!Number.isFinite(n) || n < 1) {
+      setTransferError('Indica una cantidad válida.');
+      return;
+    }
+    if (n > currentWarehouse) {
+      setTransferError(`No puedes transferir más de ${currentWarehouse} unidades del almacén.`);
+      return;
+    }
+    setTransferError(null);
+    setTransferring(true);
+    try {
+      const newPublic = currentPublic + n;
+      const newWarehouse = currentWarehouse - n;
+      const { error: updateError } = await supabase
+        .from('resources')
+        .update({
+          warehouse_quantity: newWarehouse,
+          initial_quantity: newPublic,
+          status: newPublic > 0 ? 'available' : 'inactive',
+        })
+        .eq('id', id);
+      if (updateError) throw updateError;
+      await supabase.from('activity_logs').insert({
+        action: 'warehouse_transfer',
+        entity_type: 'resource',
+        entity_id: id,
+        user_id: null,
+        details: { transferred: n, new_public: newPublic, new_warehouse: newWarehouse },
+      });
+      setTransferModalOpen(false);
+      refetchResource?.();
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : 'No se pudo realizar la transferencia.');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   const handleAdjustStock = async () => {
     if (!id) return;
     const quantity = Number.parseInt(stockQuantity, 10);
@@ -447,7 +501,7 @@ export function ResourceDetails() {
     setStockError(null);
     setAdjustingStock(true);
     try {
-      const nextStatus = quantity > 0 ? 'available' : 'on_loan';
+      const nextStatus = quantity > 0 ? 'available' : 'inactive';
       const { error: updateError } = await supabase
         .from('resources')
         .update({ initial_quantity: quantity, status: nextStatus })
@@ -568,23 +622,36 @@ export function ResourceDetails() {
           <span className="text-gray-900 dark:text-[#E8E8E6] font-medium">Detalles del recurso</span>
         </div>
         <div className="flex items-center gap-3">
-          <Button
-            variant="secondary"
-            className="bg-white dark:bg-[#242424] border-gray-200 dark:border-[#3A3A3A] shadow-sm"
-            onClick={handleMakePublic}
-            disabled={getCatalogVisibility(resource) === 'public' || visibilityLoading}
-          >
-            {getCatalogVisibility(resource) !== 'public'
-              ? visibilityLoading ? 'Publicando...' : 'Hacer público'
-              : 'Visible en catálogo'}
-          </Button>
-          <Button
-            variant="primary"
-            className="bg-black text-white hover:bg-gray-800 shadow-md"
-            onClick={() => router.push(`/solicitar?resource=${id}`)}
-          >
-            Solicitar Préstamo
-          </Button>
+          {canEditCondition && (
+            <Button
+              variant="secondary"
+              className="bg-white dark:bg-[#242424] border-gray-200 dark:border-[#3A3A3A]"
+              onClick={() => router.push(`/recursos/nuevo?id=${id}`)}
+            >
+              Editar
+            </Button>
+          )}
+          {resource.behavior !== 'instalado' && resource.behavior !== 'servicio' && (
+            <>
+              {getCatalogVisibility(resource) !== 'public' && canEditCondition && (
+                <Button
+                  variant="secondary"
+                  className="bg-white dark:bg-[#242424] border-gray-200 dark:border-[#3A3A3A]"
+                  onClick={handleMakePublic}
+                  disabled={visibilityLoading}
+                >
+                  {visibilityLoading ? 'Publicando...' : 'Hacer público'}
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                className="bg-black text-white hover:bg-gray-800"
+                onClick={() => router.push(`/solicitar?resource=${id}`)}
+              >
+                Solicitar Préstamo
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -603,51 +670,85 @@ export function ResourceDetails() {
                 )}
               </div>
               <p className="text-sm font-mono text-gray-500 dark:text-[#787774] mt-2 bg-white dark:bg-[#242424] px-3 py-1 rounded-md inline-block shadow-sm">
-                #{resource.sku} • {isReusable ? `Lote de ${resource.total_quantity || resource.initial_quantity} unidades` : 'Recurso Consumible'}
+                #{resource.sku} • {isReusable
+                ? `${resource.total_quantity || resource.initial_quantity} unidad${(resource.total_quantity || resource.initial_quantity) === 1 ? '' : 'es'} en serie`
+                : 'Stock a granel'}
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-              <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Disponibilidad</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.available_quantity || 0}</span>
-                  {isReusable ? (
-                    <>
-                      <span className="text-gray-400 dark:text-[#555]">/</span>
-                      <span className="text-sm font-medium text-gray-600 dark:text-[#AAAAAA]">{resource.total_quantity || resource.initial_quantity} Disponibles</span>
-                    </>
+            {resource.behavior === 'instalado' || resource.behavior === 'servicio' || resource.ownership_type === 'personal' ? (
+              /* ── Assigned / Fixed asset stats ── */
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">
+                    {resource.behavior === 'instalado' ? 'Instalado en' : 'Asignado a'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <UserRound className="w-4 h-4 text-gray-400 dark:text-[#555] shrink-0" />
+                    <span className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6] truncate">
+                      {resource.behavior === 'instalado'
+                        ? (resource.locations?.name || 'Sin ubicación')
+                        : (resource.owner_name || 'Sin asignar')}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Comportamiento</span>
+                  <span className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6]">
+                    {resource.behavior === 'instalado' ? 'Fijo / Instalado' : resource.behavior === 'servicio' ? 'Servicio' : 'Personal'}
+                  </span>
+                </div>
+
+                <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Valor Unitario</span>
+                  <span className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource.cost_unit ? `$${resource.cost_unit.toLocaleString()}` : 'N/A'}</span>
+                </div>
+              </div>
+            ) : (
+              /* ── Regular / Loanable resource stats ── */
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Disponibilidad</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.available_quantity || 0}</span>
+                    {isReusable ? (
+                      <>
+                        <span className="text-gray-400 dark:text-[#555]">/</span>
+                        <span className="text-sm font-medium text-gray-600 dark:text-[#AAAAAA]">{resource.total_quantity || resource.initial_quantity} Disponibles</span>
+                      </>
+                    ) : (
+                      <span className="text-sm font-medium text-gray-600 dark:text-[#AAAAAA]">en stock</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Valor Unitario</span>
+                  <span className="text-xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.cost_unit ? `$${resource.cost_unit.toLocaleString()}` : 'N/A'}</span>
+                </div>
+
+                <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Próxima agenda</span>
+                  {scheduleLoading ? (
+                    <span className="text-sm font-medium text-gray-500 dark:text-[#787774]">Cargando...</span>
+                  ) : nextScheduleEntry ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">
+                        <CalendarDays className="w-4 h-4 text-gray-400 dark:text-[#787774]" />
+                        <span>{nextScheduleEntry.startDate}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-[#787774]">
+                        <Clock3 className="w-3.5 h-3.5" />
+                        <span>{formatAgendaTimeLabel(nextScheduleEntry.start_time, nextScheduleEntry.end_time)}</span>
+                      </div>
+                    </div>
                   ) : (
-                    <span className="text-sm font-medium text-gray-600 dark:text-[#AAAAAA]">en stock</span>
+                    <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">Sin horario reservado</span>
                   )}
                 </div>
               </div>
-
-              <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Valor Unitario</span>
-                <span className="text-xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.cost_unit ? `$${resource.cost_unit.toLocaleString()}` : 'N/A'}</span>
-              </div>
-
-              <div className="bg-white dark:bg-[#242424] p-3 rounded-xl shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-[#555] font-bold block mb-1">Próxima agenda</span>
-                {scheduleLoading ? (
-                  <span className="text-sm font-medium text-gray-500 dark:text-[#787774]">Cargando agenda...</span>
-                ) : nextScheduleEntry ? (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">
-                      <CalendarDays className="w-4 h-4 text-gray-400 dark:text-[#787774]" />
-                      <span>{nextScheduleEntry.startDate}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-[#787774]">
-                      <Clock3 className="w-3.5 h-3.5" />
-                      <span>{formatAgendaTimeLabel(nextScheduleEntry.start_time, nextScheduleEntry.end_time)}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">Sin horario reservado</span>
-                )}
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Barcode Section */}
@@ -675,7 +776,7 @@ export function ResourceDetails() {
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab.toLowerCase())}
-                  className={`pb-4 text-sm font-semibold transition-all relative whitespace-nowrap ${
+                  className={`pb-4 text-sm font-semibold transition-all relative whitespace-nowrap cursor-pointer focus:outline-none ${
                     activeTab === tab.toLowerCase()
                       ? 'text-gray-900 dark:text-[#E8E8E6]'
                       : 'text-gray-400 dark:text-[#555] hover:text-gray-600 dark:hover:text-[#AAAAAA]'
@@ -726,202 +827,54 @@ export function ResourceDetails() {
                         <Building2 className="w-5 h-5 text-gray-900 dark:text-[#E8E8E6]" />
                       </div>
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-[#555] block tracking-wider">Ubicación</span>
+                        <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-[#555] block tracking-wider">
+                          {resource.behavior === 'instalado' ? 'Instalado en' : 'Ubicación'}
+                        </span>
                         <span className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource.locations?.name || 'Sede Principal'}</span>
                       </div>
                     </div>
+
+                    {(resource.ownership_type === 'personal' || resource.ownership_type === 'area') && (
+                      <div className="p-4 rounded-xl bg-gray-50 dark:bg-[#1D1D1D] flex items-center gap-4 col-span-full md:col-span-1">
+                        <div className="w-10 h-10 rounded-lg bg-white dark:bg-[#242424] shadow-xs flex items-center justify-center shrink-0">
+                          <UserRound className="w-5 h-5 text-gray-900 dark:text-[#E8E8E6]" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-[#555] block tracking-wider">
+                            {resource.ownership_type === 'personal' ? 'Asignado a' : 'Área / Aula'}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6] truncate block">
+                            {resource.owner_name || 'Sin asignar'}
+                          </span>
+                          {resource.updated_at && (
+                            <span className="text-[10px] text-gray-400 dark:text-[#555]">
+                              Desde {new Date(resource.updated_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Condition tag editor — Notion-style */}
-                  <div className="rounded-xl bg-gray-50 dark:bg-[#1D1D1D] overflow-hidden">
-                    {/* Header row */}
-                    <div className="flex items-center justify-between px-4 pt-4 pb-3">
-                      <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-[#555] tracking-wider">Estado de condición</span>
-                      {canEditCondition && (
-                        <button
-                          type="button"
-                          onClick={() => { setIsConditionOpen((o) => !o); setTagSearch(''); setShowCreateForm(false); }}
-                          className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
-                        >
-                          {isConditionOpen ? 'Hecho' : 'Editar'}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Current tags display */}
-                    <div className="px-4 pb-3 flex flex-wrap gap-1.5 min-h-[28px]">
+                  {/* Condition tags — read-only (edit via Editar button) */}
+                  <div className="rounded-xl bg-gray-50 dark:bg-[#1D1D1D] px-4 py-3">
+                    <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-[#555] tracking-wider block mb-2">Estado de condición</span>
+                    <div className="flex flex-wrap gap-1.5 min-h-[24px]">
                       {localTagIds.length === 0 ? (
-                        <span className="text-xs text-gray-400 dark:text-[#555]">Sin etiquetas</span>
+                        <span className="text-xs text-gray-400 dark:text-[#555]">Sin etiquetas — edita el recurso para añadir</span>
                       ) : (
                         orgTags
                           .filter((t) => localTagIds.includes(t.id))
                           .map((tag) => {
                             const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
                             return (
-                              <span
-                                key={tag.id}
-                                className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium', c.bg, c.text)}
-                              >
+                              <span key={tag.id} className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium', c.bg, c.text)}>
                                 <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', c.dot)} />
                                 {tag.name}
-                                {isConditionOpen && canEditCondition && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleToggleTag(tag.id)}
-                                    className="ml-0.5 opacity-60 hover:opacity-100 transition"
-                                  >
-                                    ×
-                                  </button>
-                                )}
                               </span>
                             );
                           })
                       )}
-                    </div>
-
-                    {/* Editor panel (expanded when isConditionOpen) */}
-                    {isConditionOpen && (
-                      <div className="border-t border-black/[0.05] dark:border-white/[0.05] bg-white dark:bg-[#242424]">
-                        {/* Search */}
-                        <div className="px-4 pt-3 pb-2">
-                          <input
-                            type="text"
-                            value={tagSearch}
-                            onChange={(e) => setTagSearch(e.target.value)}
-                            placeholder="Buscar etiquetas…"
-                            className="w-full rounded-lg bg-gray-50 dark:bg-[#1D1D1D] border border-gray-200 dark:border-[#3A3A3A] px-3 py-1.5 text-xs text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                          />
-                        </div>
-
-                        {/* Tag list */}
-                        <div className="max-h-44 overflow-y-auto px-2 pb-1">
-                          {orgTags
-                            .filter((t) => t.name.toLowerCase().includes(tagSearch.toLowerCase()))
-                            .map((tag) => {
-                              const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
-                              const isSelected = localTagIds.includes(tag.id);
-                              return (
-                                <button
-                                  key={tag.id}
-                                  type="button"
-                                  onClick={() => handleToggleTag(tag.id)}
-                                  className={cn(
-                                    'w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left text-xs transition',
-                                    isSelected
-                                      ? 'bg-gray-50 dark:bg-[#1D1D1D]'
-                                      : 'hover:bg-gray-50 dark:hover:bg-[#1D1D1D]'
-                                  )}
-                                >
-                                  <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium flex-1', c.bg, c.text)}>
-                                    <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', c.dot)} />
-                                    {tag.name}
-                                  </span>
-                                  {isSelected && (
-                                    <svg className="h-3.5 w-3.5 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                                    </svg>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          {orgTags.filter((t) => t.name.toLowerCase().includes(tagSearch.toLowerCase())).length === 0 && (
-                            <p className="px-2 py-3 text-xs text-gray-400 dark:text-[#555] text-center">Sin resultados</p>
-                          )}
-                        </div>
-
-                        {/* Create new tag */}
-                        <div className="border-t border-gray-100 dark:border-[#2A2A2A] px-4 py-3">
-                          {!showCreateForm ? (
-                            <button
-                              type="button"
-                              onClick={() => { setShowCreateForm(true); setNewTagName(tagSearch); }}
-                              className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-[#787774] hover:text-gray-900 dark:hover:text-[#E8E8E6] transition"
-                            >
-                              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                              </svg>
-                              Nueva etiqueta
-                            </button>
-                          ) : (
-                            <div className="space-y-2">
-                              <input
-                                type="text"
-                                value={newTagName}
-                                onChange={(e) => setNewTagName(e.target.value)}
-                                placeholder="Nombre de la etiqueta"
-                                autoFocus
-                                className="w-full rounded-lg bg-gray-50 dark:bg-[#1D1D1D] border border-gray-200 dark:border-[#3A3A3A] px-3 py-1.5 text-xs text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                              />
-                              {/* Color picker */}
-                              <div className="flex flex-wrap gap-1.5">
-                                {TAG_COLOR_KEYS.map((key) => (
-                                  <button
-                                    key={key}
-                                    type="button"
-                                    title={key}
-                                    onClick={() => setNewTagColor(key)}
-                                    className={cn(
-                                      'h-5 w-5 rounded-full transition ring-2 ring-offset-1',
-                                      TAG_COLORS[key].dot,
-                                      newTagColor === key ? 'ring-gray-900 dark:ring-white' : 'ring-transparent'
-                                    )}
-                                  />
-                                ))}
-                              </div>
-                              {/* Preview + create */}
-                              <div className="flex items-center gap-2">
-                                {newTagName && (
-                                  <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium', TAG_COLORS[newTagColor].bg, TAG_COLORS[newTagColor].text)}>
-                                    <span className={cn('h-1.5 w-1.5 rounded-full', TAG_COLORS[newTagColor].dot)} />
-                                    {newTagName}
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={handleCreateTag}
-                                  disabled={!newTagName.trim() || creatingTag}
-                                  className="ml-auto px-3 py-1 rounded-lg bg-gray-900 dark:bg-[#E8E8E6] text-white dark:text-[#191919] text-xs font-medium hover:opacity-90 transition disabled:opacity-40"
-                                >
-                                  {creatingTag ? 'Creando…' : 'Crear'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setShowCreateForm(false)}
-                                  className="text-xs text-gray-400 dark:text-[#555] hover:text-gray-700 dark:hover:text-gray-300 transition"
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Notes */}
-                    <div className={cn('px-4 pb-4', isConditionOpen ? 'pt-0 border-t border-black/[0.05] dark:border-white/[0.05]' : 'pt-0')}>
-                      {isConditionOpen ? (
-                        <div className="pt-3 space-y-2">
-                          <label className="text-[10px] uppercase font-bold text-gray-400 dark:text-[#555] tracking-wider block">Nota</label>
-                          <textarea
-                            value={notesDraft}
-                            onChange={(e) => setNotesDraft(e.target.value)}
-                            placeholder="Observaciones de condición…"
-                            rows={2}
-                            className="w-full rounded-lg border border-gray-200 dark:border-[#3A3A3A] bg-gray-50 dark:bg-[#1D1D1D] px-3 py-2 text-xs text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleSaveNotes}
-                            disabled={savingNotes}
-                            className="px-3 py-1 rounded-lg bg-gray-900 dark:bg-[#E8E8E6] text-white dark:text-[#191919] text-xs font-medium hover:opacity-90 transition disabled:opacity-50"
-                          >
-                            {savingNotes ? 'Guardando…' : 'Guardar nota'}
-                          </button>
-                        </div>
-                      ) : resource?.condition_notes ? (
-                        <p className="text-xs text-gray-500 dark:text-[#787774] pt-1 pb-1">{resource.condition_notes}</p>
-                      ) : null}
                     </div>
                   </div>
 
@@ -1174,14 +1127,25 @@ export function ResourceDetails() {
                       </Button>
                     )}
                     {!isReusable && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="bg-white dark:bg-[#242424] border-gray-200 dark:border-[#3A3A3A]"
-                        onClick={openAdjustStockModal}
-                      >
-                        Ajustar stock
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="bg-white dark:bg-[#242424] border-gray-200 dark:border-[#3A3A3A]"
+                          onClick={openAdjustStockModal}
+                        >
+                          Ajustar público
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="bg-white dark:bg-[#242424] border-gray-200 dark:border-[#3A3A3A]"
+                          onClick={openTransferModal}
+                          disabled={(resource.warehouse_quantity ?? 0) === 0}
+                        >
+                          Transferir →
+                        </Button>
+                      </div>
                     )}
                   </div>
 
@@ -1190,39 +1154,56 @@ export function ResourceDetails() {
                       <table className="w-full text-sm text-left border-collapse">
                         <thead className="bg-gray-50/80 dark:bg-[#1D1D1D] border-b border-gray-200 dark:border-[#3A3A3A]">
                           <tr>
-                            <th className="py-4 px-5 font-bold text-gray-500 dark:text-[#787774] uppercase tracking-wider text-[10px]">Etiqueta / ID</th>
                             <th className="py-4 px-5 font-bold text-gray-500 dark:text-[#787774] uppercase tracking-wider text-[10px]">Núm. Serie</th>
                             <th className="py-4 px-5 font-bold text-gray-500 dark:text-[#787774] uppercase tracking-wider text-[10px]">Estado</th>
-                            <th className="py-4 px-5 font-bold text-gray-500 dark:text-[#787774] uppercase tracking-wider text-[10px]">Usuario Actual</th>
+                            <th className="py-4 px-5 font-bold text-gray-500 dark:text-[#787774] uppercase tracking-wider text-[10px]">Asignado a</th>
+                            <th className="py-4 px-5 font-bold text-gray-500 dark:text-[#787774] uppercase tracking-wider text-[10px]">En uso por</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-[#2D2D2D]">
-                          {units.length > 0 ? units.map((unit) => (
+                          {units.length > 0 ? units.map((unit) => {
+                            const activeLoan = unit.loans?.find((loan: any) => loan.status === 'active' || loan.status === 'overdue');
+                            const assignedUser = unit.assigned_to_user_id ? users.find((u: any) => u.id === unit.assigned_to_user_id) : null;
+                            return (
                             <tr key={unit.id} className="hover:bg-gray-50/50 dark:hover:bg-[#2A2A2A] transition-colors">
-                              <td className="py-4 px-5 font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.sku}-{unit.serial_number?.split('-').pop() || unit.id.substring(0,4)}</td>
                               <td className="py-4 px-5 text-gray-500 dark:text-[#787774] font-mono text-xs">{unit.serial_number || 'N/A'}</td>
                               <td className="py-4 px-5">
                                 <Badge variant={unit.status === 'available' ? 'success' : unit.status === 'on_loan' ? 'info' : 'warning'} className="font-semibold shadow-xs">
                                   {unit.status === 'available' ? 'Disponible' : unit.status === 'on_loan' ? 'Prestado' : 'Mantenimiento'}
                                 </Badge>
                               </td>
+                              <td className="py-4 px-5">
+                                {assignedUser ? (
+                                  <div>
+                                    <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">{assignedUser.full_name || assignedUser.email}</span>
+                                    {unit.assigned_at && (
+                                      <p className="text-[10px] text-gray-400 dark:text-[#555] mt-0.5">
+                                        Desde {new Date(unit.assigned_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-gray-400 dark:text-[#555]">Sin asignar</span>
+                                )}
+                              </td>
                               <td className="py-4 px-5 text-gray-900 dark:text-[#E8E8E6] font-medium">
-                                {unit.loans?.find((loan: any) => loan.status === 'active' || loan.status === 'overdue') ? (
+                                {activeLoan ? (
                                   <div className="space-y-1">
-                                  <Link href={`/usuarios?id=${unit.loans.find((loan: any) => loan.status === 'active' || loan.status === 'overdue').user_id}`} className="text-blue-600 hover:underline flex items-center gap-2">
-                                    <div className="w-5 h-5 rounded-full bg-blue-50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 flex items-center justify-center text-[10px]">
-                                      {unit.loans.find((loan: any) => loan.status === 'active' || loan.status === 'overdue').profiles?.full_name?.charAt(0)}
-                                    </div>
-                                    {unit.loans.find((loan: any) => loan.status === 'active' || loan.status === 'overdue').profiles?.full_name}
-                                  </Link>
-                                  <p className="text-[11px] text-gray-500 dark:text-[#787774]">
-                                    Previsto: {unit.loans.find((loan: any) => loan.status === 'active' || loan.status === 'overdue').requests?.needed_until || unit.loans.find((loan: any) => loan.status === 'active' || loan.status === 'overdue').due_date || 'Sin fecha'} · {formatAgendaTimeLabel(undefined, unit.loans.find((loan: any) => loan.status === 'active' || loan.status === 'overdue').requests?.end_time)}
-                                  </p>
+                                    <Link href={`/usuarios?id=${activeLoan.user_id}`} className="text-blue-600 hover:underline flex items-center gap-2 text-sm">
+                                      <div className="w-5 h-5 rounded-full bg-blue-50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 flex items-center justify-center text-[10px]">
+                                        {activeLoan.profiles?.full_name?.charAt(0)}
+                                      </div>
+                                      {activeLoan.profiles?.full_name}
+                                    </Link>
+                                    <p className="text-[11px] text-gray-500 dark:text-[#787774]">
+                                      Hasta: {activeLoan.requests?.needed_until || activeLoan.due_date || 'Sin fecha'}
+                                    </p>
                                   </div>
                                 ) : <span className="text-gray-300 dark:text-[#444]">—</span>}
                               </td>
                             </tr>
-                          )) : (
+                            );
+                          }) : (
                             <tr>
                               <td colSpan={4} className="py-12 text-center text-gray-500 dark:text-[#787774] font-medium">
                                 No se encontraron unidades individuales para este recurso.
@@ -1233,26 +1214,45 @@ export function ResourceDetails() {
                       </table>
                     </div>
                   ) : (
-                    <div className="bg-gray-50/55 dark:bg-white/[0.03] rounded-2xl p-8 flex flex-col items-center text-center">
-                      <div className="w-16 h-16 rounded-full bg-white dark:bg-[#242424] shadow-sm flex items-center justify-center mb-4">
-                        <Layers className="w-8 h-8 text-gray-400 dark:text-[#555]" />
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Stock Público */}
+                        <div className="bg-gray-50/55 dark:bg-white/[0.03] rounded-2xl p-6 flex flex-col items-center text-center">
+                          <p className="text-[10px] uppercase tracking-wider font-bold text-gray-400 dark:text-[#555] mb-3">Stock Público</p>
+                          <div className="w-12 h-12 rounded-full bg-white dark:bg-[#242424] shadow-sm flex items-center justify-center mb-3">
+                            <Layers className="w-6 h-6 text-gray-400 dark:text-[#555]" />
+                          </div>
+                          <span className="text-3xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.available_quantity ?? 0}</span>
+                          <span className="text-xs text-gray-500 dark:text-[#787774] mt-1">visible para usuarios</span>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="mt-4 bg-white dark:bg-[#242424] w-full"
+                            onClick={openAdjustStockModal}
+                          >
+                            Ajustar
+                          </Button>
+                        </div>
+
+                        {/* Stock Almacén */}
+                        <div className="bg-gray-50/55 dark:bg-white/[0.03] rounded-2xl p-6 flex flex-col items-center text-center">
+                          <p className="text-[10px] uppercase tracking-wider font-bold text-gray-400 dark:text-[#555] mb-3">Stock Almacén</p>
+                          <div className="w-12 h-12 rounded-full bg-white dark:bg-[#242424] shadow-sm flex items-center justify-center mb-3">
+                            <Layers className="w-6 h-6 text-gray-400 dark:text-[#555]" />
+                          </div>
+                          <span className="text-3xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.warehouse_quantity ?? 0}</span>
+                          <span className="text-xs text-gray-500 dark:text-[#787774] mt-1">solo visible para admin</span>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="mt-4 bg-white dark:bg-[#242424] w-full"
+                            onClick={openTransferModal}
+                            disabled={(resource.warehouse_quantity ?? 0) === 0}
+                          >
+                            Transferir →
+                          </Button>
+                        </div>
                       </div>
-                      <h4 className="font-bold text-gray-900 dark:text-[#E8E8E6] text-lg">Control de Stock Bulk</h4>
-                      <p className="text-gray-500 dark:text-[#787774] text-sm max-w-sm mt-2">
-                        Este recurso se gestiona por cantidad total. No tiene números de serie individuales.
-                      </p>
-                      <div className="mt-6 flex items-baseline gap-2">
-                        <span className="text-4xl font-bold text-gray-900 dark:text-[#E8E8E6]">{resource.available_quantity}</span>
-                        <span className="text-gray-500 dark:text-[#787774] font-medium">unidades disponibles en stock</span>
-                      </div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="mt-6 bg-white dark:bg-[#242424]"
-                        onClick={openAdjustStockModal}
-                      >
-                        Ajustar stock actual
-                      </Button>
                     </div>
                   )}
 
@@ -1364,18 +1364,37 @@ export function ResourceDetails() {
                 <h3 className="font-bold text-sm uppercase tracking-[0.2em] mb-4 text-gray-400">Estado Rápido</h3>
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-400">Tipo de Propiedad</span>
-                    <span className="text-sm font-bold capitalize">
+                    <span className="text-sm text-gray-400">Visibilidad</span>
+                    <span className="text-sm font-bold">
                       {getCatalogVisibility(resource) === 'internal'
-                        ? 'Solo administración'
+                        ? 'Solo admin'
                         : getCatalogVisibility(resource) === 'restricted'
-                          ? 'Visible por área / asignado'
-                          : 'Catálogo público'}
+                          ? 'Asignado'
+                          : 'Público'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-400">Dueño/Área</span>
-                    <span className="text-sm font-bold">{resource.owner_name || 'Institucional'}</span>
+                    <span className="text-sm text-gray-400">Propiedad</span>
+                    <span className="text-sm font-bold">
+                      {resource.ownership_type === 'personal' ? 'Personal'
+                        : resource.ownership_type === 'area' ? 'Por área'
+                        : 'General'}
+                    </span>
+                  </div>
+                  {resource.owner_name && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-400">Asignado a</span>
+                      <span className="text-sm font-bold">{resource.owner_name}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-400">Comportamiento</span>
+                    <span className="text-sm font-bold">
+                      {resource.behavior === 'instalado' ? 'Fijo/Instalado'
+                        : resource.behavior === 'servicio' ? 'Servicio'
+                        : resource.behavior === 'gastable' ? 'Gastable'
+                        : 'Reutilizable'}
+                    </span>
                   </div>
                   <div className="pt-4 mt-4 border-t border-gray-800">
                     <button
@@ -1549,9 +1568,9 @@ export function ResourceDetails() {
           <div className="w-full max-w-md rounded-2xl bg-white shadow-xl dark:bg-[#242424]">
             <div className="flex items-center justify-between p-5">
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Actualizar stock</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Actualizar stock público</h3>
                 <p className="mt-1 text-sm text-gray-500 dark:text-[#787774]">
-                  Define la cantidad disponible actual para este consumible.
+                  Define la cantidad visible para usuarios en el catálogo.
                 </p>
               </div>
               <button
@@ -1564,7 +1583,7 @@ export function ResourceDetails() {
             </div>
             <div className="space-y-4 px-5 pb-5">
               <label className="block">
-                <span className="mb-2 block text-sm font-medium text-gray-700 dark:text-[#C8C8C6]">Stock disponible</span>
+                <span className="mb-2 block text-sm font-medium text-gray-700 dark:text-[#C8C8C6]">Stock público</span>
                 <Input
                   type="number"
                   min="0"
@@ -1588,6 +1607,61 @@ export function ResourceDetails() {
                   disabled={adjustingStock}
                 >
                   {adjustingStock ? 'Guardando…' : 'Guardar stock'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {transferModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl dark:bg-[#242424]">
+            <div className="flex items-center justify-between p-5">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Transferir al catálogo</h3>
+                <p className="mt-1 text-sm text-gray-500 dark:text-[#787774]">
+                  Mueve unidades del almacén al stock público visible para usuarios.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !transferring && setTransferModalOpen(false)}
+                className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:text-[#555] dark:hover:bg-[#2A2A2A] dark:hover:text-[#AAAAAA]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-4 px-5 pb-5">
+              <div className="rounded-xl bg-gray-50 dark:bg-[#1D1D1D] px-4 py-3 text-sm text-gray-600 dark:text-[#AAAAAA]">
+                Almacén disponible: <span className="font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource?.warehouse_quantity ?? 0}</span> unidades
+              </div>
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium text-gray-700 dark:text-[#C8C8C6]">¿Cuántas transferir?</span>
+                <Input
+                  type="number"
+                  min="1"
+                  max={resource?.warehouse_quantity ?? 0}
+                  value={transferQuantity}
+                  onChange={(e) => setTransferQuantity(e.target.value)}
+                />
+              </label>
+              {transferError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400">
+                  {transferError}
+                </div>
+              )}
+              <div className="flex gap-3 pt-2">
+                <Button variant="secondary" className="flex-1" onClick={() => setTransferModalOpen(false)} disabled={transferring}>
+                  Cancelar
+                </Button>
+                <Button
+                  variant="primary"
+                  className="flex-1 bg-black text-white hover:bg-gray-800"
+                  onClick={handleTransferToPublic}
+                  disabled={transferring}
+                >
+                  {transferring ? 'Transfiriendo…' : 'Transferir'}
                 </Button>
               </div>
             </div>

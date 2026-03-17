@@ -100,7 +100,7 @@ export async function allocateAndCreateLoans(
       .from('resources')
       .update({
         initial_quantity: currentStock - quantity,
-        status: currentStock - quantity > 0 ? 'available' : 'on_loan',
+        status: currentStock - quantity > 0 ? 'available' : 'inactive',
       })
       .eq('id', resourceId);
     if (stockError) throw stockError;

@@ -16,6 +16,7 @@ import {
   UserRound,
   Sparkles,
   Layers,
+  ChevronDown,
 } from 'lucide-react';
 import { getCategoryIconComponent } from '@/lib/categoryIcons';
 import { Button } from '@/components/ui/Button';
@@ -44,7 +45,7 @@ const segmentCopy: Record<SegmentFilter, { label: string; descAdmin: string; des
   },
   asignados: {
     label: 'Asignados',
-    descAdmin: 'Activos fijos vinculados a personas o áreas.',
+    descAdmin: 'Recursos fijos instalados, asignados a personas o vinculados a áreas.',
     descEmployee: 'Recursos asignados a tu nombre.',
   },
   todos: {
@@ -62,6 +63,7 @@ export function Resources() {
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
   const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>('catalogo');
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const { resources, loading: isLoadingData, error } = useResources();
   const { tags: orgTags } = useConditionTags();
   const { role } = useRole();
@@ -119,18 +121,18 @@ export function Resources() {
 
       if (selectedTagIds.length > 0) {
         const rTagIds = (resource.resource_condition_tags || [])
-          .map((rct: any) => rct.condition_tags?.id)
+          .map((rct: any) => rct.tag_id || rct.condition_tags?.id)
           .filter(Boolean);
         if (!selectedTagIds.some((tid) => rTagIds.includes(tid))) return false;
       }
 
       const visibility = getCatalogVisibility(resource);
-      if (segmentFilter === 'catalogo') return visibility === 'public';
-      if (segmentFilter === 'asignados') return visibility === 'restricted';
+      if (segmentFilter === 'catalogo') return visibility === 'public' && resource.behavior !== 'instalado';
+      if (segmentFilter === 'asignados') return visibility === 'restricted' || resource.behavior === 'instalado' || resource.ownership_type === 'area';
       if (segmentFilter === 'internos') return isAdmin ? visibility === 'internal' : false;
       return true;
     });
-  }, [visibleResources, searchQuery, selectedCategory, segmentFilter, isAdmin]);
+  }, [visibleResources, searchQuery, selectedCategory, selectedTagIds, segmentFilter, isAdmin]);
 
   const featuredResources = useMemo(
     () =>
@@ -156,144 +158,121 @@ export function Resources() {
     const visibility = getCatalogVisibility(resource);
     const isAssigned = visibility === 'restricted';
     const isInternal = visibility === 'internal';
-    const stockLabel = resource.type === 'consumable' ? 'en stock' : 'disponibles';
-    const availability = (resource.total_quantity ?? 0) > 0
-      ? Math.min(100, ((resource.available_quantity ?? 0) / (resource.total_quantity ?? 1)) * 100)
-      : 0;
+    const avail = resource.available_quantity ?? 0;
+    const total = resource.total_quantity ?? 0;
+    const pct = total > 0 ? Math.min(100, (avail / total) * 100) : 0;
+    const isFixedOrService = resource.behavior === 'instalado' || resource.behavior === 'servicio';
+    const behaviorLabel = resource.behavior === 'instalado' ? 'Fijo' : resource.behavior === 'servicio' ? 'Servicio' : resource.behavior === 'gastable' ? 'Gastable' : resource.type === 'consumable' ? 'Gastable' : 'Reutilizable';
+    const condTags = (resource.resource_condition_tags || []).filter((rct: any) => rct.condition_tags);
+
+    const availColor = pct > 66 ? 'text-emerald-600 dark:text-emerald-400' : pct > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-500';
+    const availDot = pct > 66 ? 'bg-emerald-500' : pct > 0 ? 'bg-amber-400' : 'bg-rose-500';
 
     return (
       <div
         key={resource.id}
         onClick={() => router.push(`/recursos/${resource.id}`)}
-        className={cn(
-          'group cursor-pointer overflow-hidden rounded-[28px] transition-all duration-300',
-          compact
-            ? 'bg-white/80 p-3 hover:bg-white dark:bg-[#242424]/80 dark:hover:bg-[#242424]'
-            : 'bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)] hover:-translate-y-0.5 dark:bg-[#242424] dark:shadow-none'
-        )}
+        className="group cursor-pointer flex flex-col overflow-hidden rounded-2xl border border-gray-100 bg-white transition-all duration-200 hover:border-gray-200 hover:shadow-sm dark:bg-[#1C1C1C] dark:border-[#2A2A2A] dark:hover:border-[#383838]"
       >
-        <div className={cn('relative overflow-hidden', compact ? 'rounded-2xl' : 'rounded-[24px]')}>
-          <div className={cn('absolute left-3 top-3 z-10 flex flex-wrap gap-2', compact && 'left-2 top-2')}>
-            <Badge className="border-0 bg-white/92 text-gray-700 backdrop-blur-sm dark:bg-[#1D1D1D]/92 dark:text-[#E8E8E6]">
+        {/* Image area */}
+        <div className="relative overflow-hidden bg-gray-50 dark:bg-[#141414]" style={{ height: compact ? 120 : 160 }}>
+          {resource.image_url ? (
+            <img
+              src={resource.image_url}
+              alt={resource.name}
+              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+              referrerPolicy="no-referrer"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              <Icon className="h-10 w-10 text-gray-200 dark:text-[#333]" />
+            </div>
+          )}
+          {/* Behavior badge — top right */}
+          <div className="absolute right-2.5 top-2.5">
+            <span className="rounded-md bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm dark:bg-black/60">
+              {behaviorLabel}
+            </span>
+          </div>
+          {/* Internal/assigned badge — top left */}
+          {(isInternal || isAssigned) && (
+            <div className="absolute left-2.5 top-2.5">
+              {isInternal ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-gray-900/80 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                  <Shield className="h-2.5 w-2.5" /> Admin
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-md bg-blue-600/80 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                  <UserRound className="h-2.5 w-2.5" /> Asignado
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Content */}
+        <div className="flex flex-1 flex-col gap-3 p-4">
+          {/* Name + category */}
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-widest text-gray-400 dark:text-[#555] mb-0.5">
               {resource.categories?.name || 'General'}
-            </Badge>
-            {isInternal && (
-              <Badge className="border-0 bg-slate-900 text-white dark:bg-[#111] dark:text-[#E8E8E6]">
-                <Shield className="mr-1 h-3 w-3" /> Solo admin
-              </Badge>
+            </p>
+            <h3 className="text-sm font-semibold leading-snug text-gray-900 dark:text-[#E8E8E6] line-clamp-2">
+              {resource.name}
+            </h3>
+          </div>
+
+          {/* Meta row */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400 dark:text-[#555]">
+            {resource.locations?.name && (
+              <span className="inline-flex items-center gap-1">
+                <MapPin className="h-3 w-3 shrink-0" />
+                <span className="truncate max-w-[120px]">{resource.locations.name}</span>
+              </span>
             )}
-            {isAssigned && (
-              <Badge className="border-0 bg-[#EEF4FF] text-[#3159B8] dark:bg-[#1E2A40] dark:text-[#A7C0FF]">
-                <UserRound className="mr-1 h-3 w-3" /> Asignado
-              </Badge>
-            )}
-            {(resource.resource_condition_tags || []).slice(0, 2).map((rct: any) => {
+            {condTags.slice(0, 1).map((rct: any) => {
               const tag = rct.condition_tags;
-              if (!tag) return null;
               const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
               return (
-                <Badge key={tag.id} className={cn('border-0', c.bg, c.text)}>
-                  <span className={cn('mr-1.5 inline-block h-1.5 w-1.5 rounded-full', c.dot)} />
+                <span key={tag.id} className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium', c.bg, c.text)}>
+                  <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', c.dot)} />
                   {tag.name}
-                </Badge>
+                </span>
               );
             })}
           </div>
-          <div className={cn('flex items-center justify-center bg-[#F6F6F3] dark:bg-[#1D1D1D]', compact ? 'h-32' : 'h-52')}>
-            <img
-              src={resource.image_url || 'https://raw.githubusercontent.com/lucide-react/lucide/main/icons/package.svg'}
-              alt={resource.name}
-              className={cn(
-                'h-full w-full object-cover transition-transform duration-700 group-hover:scale-105',
-                !resource.image_url && 'object-contain p-10 opacity-20'
-              )}
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = 'https://raw.githubusercontent.com/lucide-react/lucide/main/icons/package.svg';
-                (e.target as HTMLImageElement).classList.add('object-contain', 'p-10', 'opacity-20');
-              }}
-            />
-          </div>
-        </div>
 
-        <div className={cn(compact ? 'px-1 pb-1 pt-3' : 'p-5')}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="truncate text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource.name}</h3>
-              <p className="mt-1 text-xs font-mono text-gray-500 dark:text-[#787774]">{resource.sku}</p>
-            </div>
-            <span className="rounded-full bg-[#F3F4F6] px-2 py-1 text-[11px] font-medium text-gray-700 dark:bg-[#1D1D1D] dark:text-[#C8C8C6]">
-              {resource.type === 'consumable' ? 'Bulk' : resource.type === 'instalado' ? 'Fijo' : resource.type === 'servicio' ? 'Servicio' : 'Serie'}
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-[#AAAAAA]">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#F6F6F3] dark:bg-[#1D1D1D]">
-                <Icon className="h-4 w-4" />
+          {/* Availability / assigned */}
+          <div className="mt-auto">
+            {isAssigned || isInternal || isFixedOrService ? (
+              <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-[#787774]">
+                <UserRound className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{resource.owner_name || (isFixedOrService ? resource.locations?.name || '—' : isInternal ? 'Uso interno' : '—')}</span>
               </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-[#787774]">Ubicación</p>
-                <p className="truncate text-sm font-medium text-gray-800 dark:text-[#E8E8E6]">
-                  {resource.locations?.name || 'No asignada'}
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-[#F7F7F5] px-4 py-3 dark:bg-[#1D1D1D]">
-              <div className="flex items-center justify-between text-[11px] font-medium text-gray-500 dark:text-[#787774]">
-                <span>{isAssigned ? 'Asignado a' : 'Disponibilidad'}</span>
-                {!isAssigned && (
-                  <span className="tabular-nums text-gray-800 dark:text-[#E8E8E6]">
-                    {resource.available_quantity ?? 0}/{resource.total_quantity ?? 0}
-                  </span>
-                )}
-              </div>
-              {isAssigned || isInternal ? (
-                <div className="mt-2 flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">
-                  <UserRound className="h-4 w-4 text-gray-500 dark:text-[#787774]" />
-                  <span>{resource.owner_name || (isInternal ? 'Uso interno' : 'Asignación interna')}</span>
-                </div>
-              ) : (
-                <>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white dark:bg-[#2B2B2B]">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        availability > 50 ? 'bg-emerald-500' : availability > 0 ? 'bg-amber-500' : 'bg-rose-500'
-                      )}
-                      style={{ width: `${availability}%` }}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs text-gray-500 dark:text-[#787774]">
-                    {(resource.available_quantity ?? 0)} {stockLabel}
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-5 flex items-center gap-2">
-            {isAssigned || isInternal || resource.type === 'instalado' || resource.type === 'servicio' ? (
-              <Button variant="secondary" className="w-full bg-[#F3F4F6] dark:bg-[#1D1D1D]" onClick={(e) => {
-                e.stopPropagation();
-                router.push(`/recursos/${resource.id}`);
-              }}>
-                Ver ficha
-              </Button>
             ) : (
-              <Button
-                variant="primary"
-                className="w-full bg-[#111827] text-white hover:bg-black dark:bg-[#E8E8E6] dark:text-[#191919] dark:hover:bg-white"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  router.push(`/solicitar?resource=${resource.id}`);
-                }}
-              >
-                Solicitar
-              </Button>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-400 dark:text-[#555]">Disponible</span>
+                <span className={cn('text-xs font-semibold tabular-nums', availColor)}>{avail}/{total}</span>
+              </div>
             )}
           </div>
+
+          {/* CTA */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              router.push(isAssigned || isInternal || isFixedOrService ? `/recursos/${resource.id}` : `/solicitar?resource=${resource.id}`);
+            }}
+            className={cn(
+              'mt-1 w-full rounded-xl py-2.5 text-xs font-semibold transition-colors cursor-pointer',
+              isAssigned || isInternal || isFixedOrService
+                ? 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-[#2A2A2A] dark:text-[#C8C8C6] dark:hover:bg-[#333]'
+                : 'bg-gray-900 text-white hover:bg-black dark:bg-[#E8E8E6] dark:text-[#111] dark:hover:bg-white'
+            )}
+          >
+            {isAssigned || isInternal || isFixedOrService ? 'Ver ficha' : 'Solicitar'}
+          </button>
         </div>
       </div>
     );
@@ -358,7 +337,7 @@ export function Resources() {
                     type="button"
                     onClick={() => setSelectedCategory(category.name)}
                     className={cn(
-                      'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition',
+                      'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition cursor-pointer',
                       isSelected
                         ? 'bg-gray-900 text-white dark:bg-[#E8E8E6] dark:text-[#191919]'
                         : 'bg-[#F3F4F6] text-gray-600 hover:bg-[#E7E8EB] dark:bg-[#1D1D1D] dark:text-[#C8C8C6] dark:hover:bg-[#2A2A2A]'
@@ -387,7 +366,7 @@ export function Resources() {
                         )
                       }
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition',
+                        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition cursor-pointer',
                         isSelected
                           ? cn(c.bg, c.text, 'ring-1 ring-current')
                           : 'bg-[#F3F4F6] text-gray-600 hover:bg-[#E7E8EB] dark:bg-[#1D1D1D] dark:text-[#C8C8C6] dark:hover:bg-[#2A2A2A]'
@@ -423,13 +402,13 @@ export function Resources() {
               <div className="flex items-center gap-2 rounded-full bg-white/10 p-1">
                 <button
                   onClick={() => setViewMode('grid')}
-                  className={cn('rounded-full p-2 transition', viewMode === 'grid' ? 'bg-white text-gray-900' : 'text-white/70')}
+                  className={cn('rounded-full p-2 transition cursor-pointer', viewMode === 'grid' ? 'bg-white text-gray-900' : 'text-white/70')}
                 >
                   <LayoutGrid className="h-4 w-4" />
                 </button>
                 <button
                   onClick={() => setViewMode('list')}
-                  className={cn('rounded-full p-2 transition', viewMode === 'list' ? 'bg-white text-gray-900' : 'text-white/70')}
+                  className={cn('rounded-full p-2 transition cursor-pointer', viewMode === 'list' ? 'bg-white text-gray-900' : 'text-white/70')}
                 >
                   <ListIcon className="h-4 w-4" />
                 </button>
@@ -445,7 +424,7 @@ export function Resources() {
                   type="button"
                   onClick={() => setSegmentFilter(segment)}
                   className={cn(
-                    'rounded-full px-3 py-1.5 text-xs font-medium transition',
+                    'rounded-full px-3 py-1.5 text-xs font-medium transition cursor-pointer',
                     segmentFilter === segment ? 'bg-white text-gray-900' : 'bg-white/10 text-white/80 hover:bg-white/15'
                   )}
                 >
@@ -491,155 +470,163 @@ export function Resources() {
                 </div>
                 <p className="text-sm text-gray-500 dark:text-[#787774]">Listos para solicitar o revisar</p>
               </div>
-              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4">
                 {featuredResources.map((resource) => renderResourceCard(resource, true))}
               </div>
             </section>
           )}
 
-          {groupedResources.map(([groupName, items]) => (
-            <section key={groupName} className="space-y-4">
-              <div className="flex items-end justify-between gap-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400 dark:text-[#787774]">Categoría</p>
-                  <h2 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-[#E8E8E6]">{groupName}</h2>
-                </div>
-                <p className="text-sm text-gray-500 dark:text-[#787774]">{items.length} recurso(s)</p>
-              </div>
-              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                {items.map((resource) => renderResourceCard(resource))}
-              </div>
-            </section>
-          ))}
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-[28px] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)] dark:bg-[#242424] dark:shadow-none">
-          {/* Column header */}
-          <div className="hidden sm:grid grid-cols-[1fr_160px_44px] gap-4 border-b border-black/[0.05] dark:border-white/[0.04] px-5 py-2.5">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-[#555]">Recurso</span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-[#555]">Disponibilidad</span>
-            <span />
-          </div>
-
-          <div className="divide-y divide-black/[0.04] dark:divide-white/[0.04]">
-            {filteredResources.map((resource) => {
-              const Icon = getCategoryIconComponent(resource.categories?.icon_name);
-              const visibility = getCatalogVisibility(resource);
-              const isAssigned = visibility === 'restricted';
-              const isInternal = visibility === 'internal';
-              const avail = resource.available_quantity ?? 0;
-              const total = resource.total_quantity ?? 0;
-              const pct = total > 0 ? Math.min(100, (avail / total) * 100) : 0;
-              const barColor = pct > 50 ? 'bg-emerald-500' : pct > 0 ? 'bg-amber-500' : 'bg-rose-400';
-
-              return (
+          {groupedResources.map(([groupName, items]) => {
+            const isCollapsed = collapsedCategories.has(groupName);
+            return (
+              <section key={groupName} className="space-y-4">
                 <div
-                  key={resource.id}
-                  onClick={() => router.push(`/recursos/${resource.id}`)}
-                  className="group flex cursor-pointer items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[#F7F7F6] dark:hover:bg-[#2A2A2A]"
+                  className="flex items-end justify-between gap-4 cursor-pointer select-none"
+                  onClick={() =>
+                    setCollapsedCategories((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(groupName)) next.delete(groupName);
+                      else next.add(groupName);
+                      return next;
+                    })
+                  }
                 >
-                  {/* Thumbnail */}
-                  <div className="h-14 w-14 shrink-0 overflow-hidden rounded-[16px] bg-[#F4F4F2] dark:bg-[#1D1D1D] ring-1 ring-black/[0.04] dark:ring-white/[0.05]">
-                    <img
-                      src={resource.image_url || 'https://raw.githubusercontent.com/lucide-react/lucide/main/icons/package.svg'}
-                      alt={resource.name}
-                      className={cn('h-full w-full object-cover transition-transform duration-300 group-hover:scale-105', !resource.image_url && 'object-contain p-3 opacity-20')}
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = 'https://raw.githubusercontent.com/lucide-react/lucide/main/icons/package.svg';
-                        (e.target as HTMLImageElement).classList.add('object-contain', 'p-3', 'opacity-20');
-                      }}
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400 dark:text-[#787774]">Categoría</p>
+                    <h2 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-[#E8E8E6]">{groupName}</h2>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isCollapsed && (
+                      <span className="text-xs text-gray-400 dark:text-[#555]">({items.length} ocultos)</span>
+                    )}
+                    {!isCollapsed && (
+                      <p className="text-sm text-gray-500 dark:text-[#787774]">{items.length} recurso(s)</p>
+                    )}
+                    <ChevronDown
+                      className={cn(
+                        'h-5 w-5 text-gray-400 dark:text-[#555] transition-transform duration-200',
+                        isCollapsed && 'rotate-180'
+                      )}
                     />
                   </div>
-
-                  {/* Name + tags */}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate text-sm font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource.name}</h3>
-                      {resource.sku && (
-                        <span className="font-mono text-[11px] text-gray-400 dark:text-[#555]">{resource.sku}</span>
-                      )}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      <span className="inline-flex items-center gap-1 rounded-[6px] bg-black/[0.04] dark:bg-white/[0.06] px-2 py-0.5 text-[11px] text-gray-600 dark:text-[#AAAAAA]">
-                        <Icon className="h-3 w-3" />{resource.categories?.name || 'General'}
-                      </span>
-                      {resource.locations?.name && (
-                        <span className="inline-flex items-center gap-1 rounded-[6px] bg-black/[0.04] dark:bg-white/[0.06] px-2 py-0.5 text-[11px] text-gray-600 dark:text-[#AAAAAA]">
-                          <MapPin className="h-3 w-3" />{resource.locations.name}
-                        </span>
-                      )}
-                      {isInternal && (
-                        <span className="inline-flex items-center gap-1 rounded-[6px] bg-gray-900 px-2 py-0.5 text-[11px] text-white dark:bg-[#111] dark:text-[#E8E8E6]">
-                          <Shield className="h-3 w-3" />Solo admin
-                        </span>
-                      )}
-                      {isAssigned && (
-                        <span className="inline-flex items-center gap-1 rounded-[6px] bg-[#EEF4FF] px-2 py-0.5 text-[11px] text-[#3159B8] dark:bg-[#1E2A40] dark:text-[#A7C0FF]">
-                          <UserRound className="h-3 w-3" />Asignado
-                        </span>
-                      )}
-                      {(resource.resource_condition_tags || []).map((rct: any) => {
-                        const tag = rct.condition_tags;
-                        if (!tag) return null;
-                        const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
-                        return (
-                          <span key={tag.id} className={cn('inline-flex items-center gap-1 rounded-[6px] px-2 py-0.5 text-[11px]', c.bg, c.text)}>
-                            <span className={cn('h-1.5 w-1.5 rounded-full', c.dot)} />
-                            {tag.name}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Availability */}
-                  <div className="hidden w-40 shrink-0 sm:block">
-                    {isAssigned || isInternal ? (
-                      <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-[#787774]">
-                        <UserRound className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{resource.owner_name || (isInternal ? 'Uso interno' : 'Asignación interna')}</span>
-                      </div>
-                    ) : (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-gray-400 dark:text-[#555]">Disponible</span>
-                          <span className={cn(
-                            'text-[11px] font-semibold tabular-nums',
-                            pct > 50 ? 'text-emerald-600 dark:text-emerald-400' : pct > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-500'
-                          )}>
-                            {avail}/{total}
-                          </span>
-                        </div>
-                        <div className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-[#333]">
-                          <div className={cn('h-full rounded-full transition-all', barColor)} style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Action */}
-                  <Button
-                    variant={isAssigned || isInternal ? 'secondary' : 'primary'}
-                    size="sm"
-                    className={cn(
-                      'shrink-0',
-                      !(isAssigned || isInternal) && 'bg-emerald-600 text-white hover:bg-emerald-700 border-0 dark:bg-emerald-600 dark:hover:bg-emerald-500'
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      router.push((isAssigned || isInternal) ? `/recursos/${resource.id}` : `/solicitar?resource=${resource.id}`);
-                    }}
-                  >
-                    {(isAssigned || isInternal) ? 'Ver ficha' : 'Solicitar'}
-                  </Button>
                 </div>
-              );
-            })}
-          </div>
+                {!isCollapsed && (
+                  <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+                    {items.map((resource) => renderResourceCard(resource))}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white dark:bg-[#1C1C1C] dark:border-[#2A2A2A]">
+          {filteredResources.map((resource, idx) => {
+            const Icon = getCategoryIconComponent(resource.categories?.icon_name);
+            const visibility = getCatalogVisibility(resource);
+            const isAssigned = visibility === 'restricted';
+            const isInternal = visibility === 'internal';
+            const isFixedOrService = resource.behavior === 'instalado' || resource.behavior === 'servicio';
+            const avail = resource.available_quantity ?? 0;
+            const total = resource.total_quantity ?? 0;
+            const pct = total > 0 ? Math.min(100, (avail / total) * 100) : 0;
+            const availColor = pct > 66 ? 'text-emerald-600 dark:text-emerald-400' : pct > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-500';
+            const condTags = (resource.resource_condition_tags || []).filter((rct: any) => rct.condition_tags);
 
-          <div className="border-t border-black/[0.04] dark:border-white/[0.04] px-5 py-3">
-            <span className="text-[11px] text-gray-400 dark:text-[#555]">{filteredResources.length} recurso(s) en esta vista</span>
+            return (
+              <div
+                key={resource.id}
+                onClick={() => router.push(`/recursos/${resource.id}`)}
+                className={cn(
+                  'group flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-gray-50 dark:hover:bg-[#242424]',
+                  idx > 0 && 'border-t border-gray-50 dark:border-[#242424]'
+                )}
+              >
+                {/* Thumbnail */}
+                <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gray-100 dark:bg-[#252525] flex items-center justify-center">
+                  {resource.image_url ? (
+                    <img
+                      src={resource.image_url}
+                      alt={resource.name}
+                      className="h-full w-full object-cover"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  ) : (
+                    <Icon className="h-5 w-5 text-gray-300 dark:text-[#444]" />
+                  )}
+                </div>
+
+                {/* Main info */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="truncate text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">{resource.name}</h3>
+                    {isInternal && (
+                      <span className="shrink-0 inline-flex items-center gap-0.5 rounded-md bg-gray-900 px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#111]">
+                        <Shield className="h-2.5 w-2.5" />Admin
+                      </span>
+                    )}
+                    {isAssigned && (
+                      <span className="shrink-0 inline-flex items-center gap-0.5 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-[#1E2A40] dark:text-[#A7C0FF]">
+                        <UserRound className="h-2.5 w-2.5" />Asignado
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-gray-400 dark:text-[#555]">{resource.categories?.name || 'General'}</span>
+                    {resource.locations?.name && (
+                      <>
+                        <span className="text-gray-200 dark:text-[#333]">·</span>
+                        <span className="inline-flex items-center gap-0.5 text-[11px] text-gray-400 dark:text-[#555]">
+                          <MapPin className="h-2.5 w-2.5" />{resource.locations.name}
+                        </span>
+                      </>
+                    )}
+                    {condTags.map((rct: any) => {
+                      const tag = rct.condition_tags;
+                      const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
+                      return (
+                        <span key={tag.id} className={cn('inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium', c.bg, c.text)}>
+                          <span className={cn('h-1 w-1 rounded-full shrink-0', c.dot)} />
+                          {tag.name}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Availability — hidden on mobile */}
+                <div className="hidden sm:block w-20 shrink-0 text-right">
+                  {isAssigned || isInternal || isFixedOrService ? (
+                    <span className="text-[11px] text-gray-400 dark:text-[#555]">
+                      {resource.owner_name || (isFixedOrService ? 'Fijo' : '—')}
+                    </span>
+                  ) : (
+                    <span className={cn('text-xs font-semibold tabular-nums', availColor)}>{avail}/{total}</span>
+                  )}
+                </div>
+
+                {/* CTA */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    router.push(isAssigned || isInternal || isFixedOrService ? `/recursos/${resource.id}` : `/solicitar?resource=${resource.id}`);
+                  }}
+                  className={cn(
+                    'shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer',
+                    isAssigned || isInternal || isFixedOrService
+                      ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-[#2A2A2A] dark:text-[#AAAAAA] dark:hover:bg-[#333]'
+                      : 'bg-gray-900 text-white hover:bg-black dark:bg-[#E8E8E6] dark:text-[#111] dark:hover:bg-white'
+                  )}
+                >
+                  {isAssigned || isInternal || isFixedOrService ? 'Ver' : 'Solicitar'}
+                </button>
+              </div>
+            );
+          })}
+
+          <div className="border-t border-gray-50 dark:border-[#242424] px-4 py-2.5">
+            <span className="text-[11px] text-gray-400 dark:text-[#555]">{filteredResources.length} recurso(s)</span>
           </div>
         </div>
       )}

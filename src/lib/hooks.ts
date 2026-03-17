@@ -82,7 +82,7 @@ export function useResources() {
           locations(name),
           departments(name),
           resource_units(id, status),
-          resource_condition_tags(condition_tags(id, name, color))
+          resource_condition_tags(tag_id, condition_tags(id, name, color))
         `)
         .order('name');
 

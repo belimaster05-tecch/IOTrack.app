@@ -10,7 +10,10 @@
     "lint": "next lint",
     "test:onboarding": "tsx scripts/test-onboarding.ts",
     "test:flow": "tsx scripts/test-flow.ts",
-    "test:flow:seed": "tsx scripts/test-flow.ts --seed"
+    "test:flow:seed": "tsx scripts/test-flow.ts --seed",
+    "test:warehouse": "tsx scripts/test-warehouse.ts",
+    "test:integration": "tsx scripts/test-integration.ts",
+    "test:panels": "tsx scripts/test-panels.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
