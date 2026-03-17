@@ -13,18 +13,22 @@ import {
   MapPin,
   Package,
   PlusCircle,
+  RotateCcw,
   Search,
+  Send,
   ShieldCheck,
   ShoppingBag,
   Tag,
   UserCircle,
+  Users2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
-import { useProfile, useRequests, useLoans, useResources } from '@/lib/hooks';
+import { useProfile, useRequests, useLoans, useResources, useUsers } from '@/lib/hooks';
 import { supabase } from '@/lib/supabase/client';
 import { getCatalogVisibility } from '@/lib/resourceVisibility';
 import { formatTimeRange } from '@/lib/scheduling';
@@ -35,6 +39,7 @@ const SECTION_ACCENT: Record<string, string> = {
   loans: '#B0894F',
   consumables: '#8B5CF6',
   assigned: '#10B981',
+  lending: '#6366F1',
 };
 
 const COLUMN_STYLES = {
@@ -62,6 +67,12 @@ const COLUMN_STYLES = {
     accent: 'bg-[#F59E0B]',
     badge: 'bg-white/70 text-[#A56B00] border-white/70 dark:bg-white/10 dark:text-[#F7C978] dark:border-white/10',
   },
+  lending: {
+    shell: 'bg-white dark:bg-[#242424]',
+    card: 'bg-[#F7F7F6] hover:bg-[#F2F2F1] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]',
+    accent: 'bg-[#6366F1]',
+    badge: 'bg-white/70 text-[#4F46E5] border-white/70 dark:bg-white/10 dark:text-[#A5B4FC] dark:border-white/10',
+  },
 } as const;
 
 function EmptyColumn({
@@ -83,6 +94,7 @@ export function MyResources() {
   const { requests, loading: loadingRequests } = useRequests();
   const { loans, loading: loadingLoans } = useLoans();
   const { resources, loading: loadingResources } = useResources();
+  const { users: orgUsers } = useUsers(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
@@ -90,9 +102,20 @@ export function MyResources() {
     loans: false,
     consumables: false,
     assigned: false,
+    lending: false,
   });
   const [consumableActivity, setConsumableActivity] = useState<any[]>([]);
   const [loadingConsumables, setLoadingConsumables] = useState(true);
+
+  // Personal lending state
+  const [assignedUnits, setAssignedUnits] = useState<any[]>([]);
+  const [personalLoans, setPersonalLoans] = useState<any[]>([]);
+  const [loadingPersonal, setLoadingPersonal] = useState(true);
+  const [lendModal, setLendModal] = useState<{ open: boolean; unit: any | null }>({ open: false, unit: null });
+  const [lendBorrowerId, setLendBorrowerId] = useState('');
+  const [lendDueDate, setLendDueDate] = useState('');
+  const [lendNotes, setLendNotes] = useState('');
+  const [lendSubmitting, setLendSubmitting] = useState(false);
 
   useEffect(() => {
     const fetchConsumableActivity = async () => {
@@ -118,6 +141,83 @@ export function MyResources() {
 
     fetchConsumableActivity();
   }, [user?.id]);
+
+  useEffect(() => {
+    const fetchPersonalData = async () => {
+      if (!user?.id) { setLoadingPersonal(false); return; }
+      setLoadingPersonal(true);
+      try {
+        const [unitsRes, loansRes] = await Promise.all([
+          supabase
+            .from('resource_units')
+            .select('id, serial_number, status, resource_id, resources(name, sku, locations(name))')
+            .eq('assigned_to_user_id', user.id)
+            .eq('status', 'available'),
+          supabase
+            .from('loans')
+            .select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)')
+            .eq('lender_user_id', user.id)
+            .neq('status', 'returned')
+            .order('due_date', { ascending: true }),
+        ]);
+        setAssignedUnits(unitsRes.data ?? []);
+        setPersonalLoans(loansRes.data ?? []);
+      } finally {
+        setLoadingPersonal(false);
+      }
+    };
+    fetchPersonalData();
+  }, [user?.id]);
+
+  const handleLendUnit = async () => {
+    if (!lendModal.unit || !lendBorrowerId || !lendDueDate || !user?.id) return;
+    setLendSubmitting(true);
+    try {
+      const { error } = await supabase.from('loans').insert({
+        unit_id: lendModal.unit.id,
+        user_id: lendBorrowerId,
+        lender_user_id: user.id,
+        start_date: new Date().toISOString().split('T')[0],
+        due_date: lendDueDate,
+        status: 'active',
+        notes: lendNotes || null,
+        organization_id: profile?.organization_id,
+      });
+      if (error) throw error;
+      toast.success('Préstamo registrado');
+      setLendModal({ open: false, unit: null });
+      setLendBorrowerId('');
+      setLendDueDate('');
+      setLendNotes('');
+      // Refresh personal data
+      const [unitsRes, loansRes] = await Promise.all([
+        supabase.from('resource_units').select('id, serial_number, status, resource_id, resources(name, sku, locations(name))').eq('assigned_to_user_id', user.id).eq('status', 'available'),
+        supabase.from('loans').select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)').eq('lender_user_id', user.id).neq('status', 'returned').order('due_date', { ascending: true }),
+      ]);
+      setAssignedUnits(unitsRes.data ?? []);
+      setPersonalLoans(loansRes.data ?? []);
+    } catch (err: any) {
+      toast.error('Error al registrar préstamo: ' + err.message);
+    } finally {
+      setLendSubmitting(false);
+    }
+  };
+
+  const handleReturnPersonalLoan = async (loanId: string) => {
+    try {
+      const { error } = await supabase.from('loans').update({ status: 'returned', return_date: new Date().toISOString().split('T')[0] }).eq('id', loanId);
+      if (error) throw error;
+      toast.success('Préstamo marcado como devuelto');
+      const [unitsRes, loansRes] = await Promise.all([
+        supabase.from('resource_units').select('id, serial_number, status, resource_id, resources(name, sku, locations(name))').eq('assigned_to_user_id', user!.id).eq('status', 'available'),
+        supabase.from('loans').select('*, resource_units(id, serial_number, resources(name, sku)), profiles!loans_user_id_fkey(full_name, email)').eq('lender_user_id', user!.id).neq('status', 'returned').order('due_date', { ascending: true }),
+      ]);
+      setAssignedUnits(unitsRes.data ?? []);
+      setPersonalLoans(loansRes.data ?? []);
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    }
+  };
 
   const myRequests = useMemo(() => requests.filter((r) => r.user_id === user?.id), [requests, user?.id]);
   const myLoans = useMemo(() => loans.filter((l) => l.user_id === user?.id && l.status !== 'returned'), [loans, user?.id]);
@@ -176,8 +276,8 @@ export function MyResources() {
     );
   }, [assignedResources, searchQuery]);
 
-  const loading = loadingRequests || loadingLoans || loadingConsumables || loadingResources;
-  const summaryCount = filteredRequests.length + filteredLoans.length + filteredConsumables.length + filteredAssignedResources.length;
+  const loading = loadingRequests || loadingLoans || loadingConsumables || loadingResources || loadingPersonal;
+  const summaryCount = filteredRequests.length + filteredLoans.length + filteredConsumables.length + filteredAssignedResources.length + personalLoans.length;
   const toggleSection = (section: string) => {
     setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
@@ -274,7 +374,7 @@ export function MyResources() {
           <p className="text-xs text-gray-400 dark:text-[#555]">Los recursos que te sean asignados aparecerán aquí.</p>
         </div>
       ) : viewMode === 'board' ? (
-      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-4">
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-5">
         <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', COLUMN_STYLES.requests.shell)}>
           <button type="button" onClick={() => toggleSection('requests')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
             <div className="flex items-center gap-2">
@@ -475,6 +575,85 @@ export function MyResources() {
               ))
             )}
           </div>
+          )}
+        </section>
+
+        {/* ── Préstamos dados ── */}
+        <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', 'bg-white dark:bg-[#242424]')}>
+          <button type="button" onClick={() => toggleSection('lending')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
+            <div className="flex items-center gap-2">
+              <Send className="h-4 w-4 text-gray-700 dark:text-[#E8E8E6]" />
+              <h2 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">Préstamos dados</h2>
+              <Badge className="bg-white/70 text-[#4F46E5] border-white/70 dark:bg-white/10 dark:text-[#A5B4FC] dark:border-white/10">{personalLoans.length}</Badge>
+            </div>
+            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform dark:text-[#787774]', !collapsedSections.lending && 'rotate-180')} />
+          </button>
+          {!collapsedSections.lending && (
+            <div className="space-y-3">
+              {/* Assigned units that can be lent */}
+              {assignedUnits.length > 0 && (
+                <div className="space-y-2">
+                  <p className="px-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-[#555]">Unidades disponibles para prestar</p>
+                  {assignedUnits.map((unit) => (
+                    <Card key={unit.id} className="p-3 shadow-none bg-[#F7F7F6] dark:bg-white/[0.04]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6] truncate">{unit.resources?.name ?? 'Recurso'}</p>
+                          <p className="text-xs text-gray-400 dark:text-[#555]">{unit.serial_number}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => { setLendModal({ open: true, unit }); setLendBorrowerId(''); setLendDueDate(''); setLendNotes(''); }}
+                          className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
+                        >
+                          <Send className="h-3 w-3" /> Prestar
+                        </button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              {/* Active personal loans */}
+              {loadingPersonal ? (
+                <EmptyColumn text="Cargando préstamos..." />
+              ) : personalLoans.length === 0 && assignedUnits.length === 0 ? (
+                <EmptyColumn text="No tienes unidades asignadas para prestar." />
+              ) : personalLoans.length === 0 ? (
+                <EmptyColumn text="No hay préstamos activos." />
+              ) : (
+                personalLoans.map((loan) => {
+                  const isOverdue = loan.status === 'overdue' || (loan.due_date && loan.due_date < new Date().toISOString().split('T')[0]);
+                  const dueToday = loan.due_date === new Date().toISOString().split('T')[0];
+                  return (
+                    <Card key={loan.id} className="p-4 shadow-none bg-[#F7F7F6] dark:bg-white/[0.04]">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6] truncate">{loan.resource_units?.resources?.name ?? 'Recurso'}</p>
+                          <p className="text-xs text-gray-400 dark:text-[#555]">{loan.resource_units?.serial_number}</p>
+                        </div>
+                        {isOverdue ? <Badge variant="error">Vencido</Badge> : dueToday ? <Badge variant="warning">Vence hoy</Badge> : <Badge variant="info">Activo</Badge>}
+                      </div>
+                      <div className="mt-2 space-y-1">
+                        <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
+                          <Users2 className="h-3 w-3" /> {loan.profiles?.full_name || loan.profiles?.email || 'Prestado a'}
+                        </p>
+                        <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
+                          <Calendar className="h-3 w-3" /> Vence {new Date(loan.due_date).toLocaleDateString('es-ES')}
+                        </p>
+                        {loan.notes && <p className="text-xs text-gray-500 dark:text-[#787774] italic truncate">{loan.notes}</p>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleReturnPersonalLoan(loan.id)}
+                        className="mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#333] text-xs text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-100 dark:hover:bg-[#2A2A2A] transition-colors"
+                      >
+                        <RotateCcw className="h-3 w-3" /> Marcar devuelto
+                      </button>
+                    </Card>
+                  );
+                })
+              )}
+            </div>
           )}
         </section>
       </div>
@@ -716,6 +895,122 @@ export function MyResources() {
               </div>
             )
           )}
+
+          {/* ── Préstamos dados ── */}
+          {renderListShell(
+            'lending',
+            'Préstamos dados',
+            personalLoans.length,
+            <Send className="h-4 w-4" />,
+            loadingPersonal ? (
+              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Cargando…</p>
+            ) : personalLoans.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">No hay préstamos dados activos.</p>
+            ) : (
+              <div>
+                <div className="grid grid-cols-[1fr_140px_110px_96px] border-b border-black/[0.04] dark:border-white/[0.04]">
+                  {[
+                    { icon: <Package className="h-3 w-3" />, label: 'Recurso' },
+                    { icon: <Users2 className="h-3 w-3" />, label: 'Prestado a' },
+                    { icon: <Calendar className="h-3 w-3" />, label: 'Vence' },
+                    { icon: <Tag className="h-3 w-3" />, label: 'Acción' },
+                  ].map((col) => (
+                    <div key={col.label} className="flex items-center gap-1 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-400 dark:text-[#555]">
+                      {col.icon}{col.label}
+                    </div>
+                  ))}
+                </div>
+                {personalLoans.map((loan) => {
+                  const isOverdue = loan.due_date < new Date().toISOString().split('T')[0];
+                  return (
+                    <div key={loan.id} className="grid grid-cols-[1fr_140px_110px_96px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-[#F7F7F6] dark:hover:bg-white/[0.025]">
+                      <div className="min-w-0 px-4 py-2.5">
+                        <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{loan.resource_units?.resources?.name ?? 'Recurso'}</p>
+                        {loan.resource_units?.serial_number && <p className="mt-0.5 text-xs text-gray-400 dark:text-[#555]">{loan.resource_units.serial_number}</p>}
+                      </div>
+                      <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774] truncate">{loan.profiles?.full_name || loan.profiles?.email || '—'}</p>
+                      <p className={cn('px-4 py-2.5 text-xs', isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-[#787774]')}>
+                        {new Date(loan.due_date).toLocaleDateString('es-ES')}
+                      </p>
+                      <div className="px-4 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() => handleReturnPersonalLoan(loan.id)}
+                          className="flex items-center gap-1 text-xs text-gray-500 dark:text-[#787774] hover:text-gray-900 dark:hover:text-[#E8E8E6] transition-colors"
+                        >
+                          <RotateCcw className="h-3 w-3" /> Devuelto
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </div>
+      )}
+
+      {/* Personal loan modal */}
+      {lendModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#242424] rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Prestar recurso</h2>
+              <p className="text-sm text-gray-500 dark:text-[#787774] mt-1">{lendModal.unit?.resources?.name} · {lendModal.unit?.serial_number}</p>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Prestar a *</label>
+                <select
+                  value={lendBorrowerId}
+                  onChange={(e) => setLendBorrowerId(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                >
+                  <option value="">Seleccionar persona...</option>
+                  {orgUsers.filter((u: any) => u.id !== user?.id).map((u: any) => (
+                    <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Fecha de devolución *</label>
+                <input
+                  type="date"
+                  value={lendDueDate}
+                  onChange={(e) => setLendDueDate(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Notas (opcional)</label>
+                <textarea
+                  value={lendNotes}
+                  onChange={(e) => setLendNotes(e.target.value)}
+                  placeholder="Motivo, condiciones del préstamo..."
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:border-gray-400 dark:focus:border-[#555] resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setLendModal({ open: false, unit: null })}
+                className="flex-1 h-9 rounded-lg border border-gray-200 dark:border-[#333] text-sm text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-100 dark:hover:bg-[#2A2A2A] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleLendUnit}
+                disabled={!lendBorrowerId || !lendDueDate || lendSubmitting}
+                className="flex-1 h-9 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {lendSubmitting ? 'Registrando...' : 'Confirmar préstamo'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

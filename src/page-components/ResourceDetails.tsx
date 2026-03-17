@@ -631,7 +631,7 @@ export function ResourceDetails() {
               Editar
             </Button>
           )}
-          {resource.behavior !== 'instalado' && resource.behavior !== 'servicio' && (
+          {resource.behavior !== 'instalado' && resource.behavior !== 'servicio' && resource.ownership_type !== 'personal' && (
             <>
               {getCatalogVisibility(resource) !== 'public' && canEditCondition && (
                 <Button

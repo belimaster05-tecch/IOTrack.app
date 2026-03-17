@@ -585,7 +585,7 @@ function NewResourceInner() {
           </div>
 
           {/* Unit assignment — only in edit mode */}
-          {editId && existingUnits.length > 0 && (
+          {editId && existingUnits.length > 0 && (behavior === 'instalado' || ownershipType === 'personal') && (
             <div className="bg-white dark:bg-[#242424] p-6 rounded-xl shadow-sm space-y-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Asignación de Unidades</h2>
