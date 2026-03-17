@@ -97,31 +97,20 @@ export function Settings() {
     }
     setAvatarUploading(true);
     try {
-      console.log('[Avatar] Iniciando subida', { userId: user.id, fileType: file.type, fileSize: file.size });
-
       // Always store as JPEG to avoid MIME-type issues (HEIC, BMP, etc.)
       const jpegBlob = await toJpegBlob(file);
-      console.log('[Avatar] JPEG generado', { blobSize: jpegBlob.size, blobType: jpegBlob.type });
-
       const path = `profiles/${user.id}/avatar.jpg`;
-      console.log('[Avatar] Subiendo a Storage, path:', path);
-
-      const { data: uploadData, error: uploadError } = await supabase.storage.from('Avatar').upload(path, jpegBlob, { upsert: true, contentType: 'image/jpeg' });
-      console.log('[Avatar] Resultado upload:', { uploadData, uploadError });
+      const { error: uploadError } = await supabase.storage.from('Avatar').upload(path, jpegBlob, { upsert: true, contentType: 'image/jpeg' });
       if (uploadError) throw uploadError;
-
       const { data: urlData } = supabase.storage.from('Avatar').getPublicUrl(path);
       const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
-      console.log('[Avatar] URL pública:', publicUrl);
-
       const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
-      console.log('[Avatar] Update profile:', { updateError });
       if (updateError) throw updateError;
-
+      // Update local state immediately so the UI reflects the new avatar without reload
+      setProfileData((prev: any) => prev ? { ...prev, avatar_url: publicUrl } : prev);
       await refreshAuthState();
       toast.success('Foto de perfil actualizada');
     } catch (err: any) {
-      console.error('[Avatar] ERROR completo:', err);
       toast.error('Error al subir la foto: ' + err.message);
     } finally {
       setAvatarUploading(false);
