@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ChevronRight, Printer, CheckCircle2, ArrowRight, AlertCircle, Layers, Building2, Laptop, Palette, FlaskConical, Ruler, ScanLine, Plus, Trash2, X, CalendarDays, Clock3, History, Upload, FileText, BarChart3, Download, ExternalLink, UserRound } from 'lucide-react';
+import { ChevronRight, Printer, CheckCircle2, ArrowRight, AlertCircle, Layers, Building2, Laptop, Palette, FlaskConical, Ruler, ScanLine, Plus, Trash2, X, CalendarDays, Clock3, History, Upload, FileText, BarChart3, Download, ExternalLink, UserRound, Info } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
@@ -810,6 +810,16 @@ export function ResourceDetails() {
                       {resource.description || 'No hay descripción disponible para este recurso.'}
                     </p>
                   </div>
+
+                  {resource.permitted_use && (
+                    <div className="flex gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/30">
+                      <Info className="w-4 h-4 text-blue-500 dark:text-blue-400 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="text-xs font-semibold text-blue-700 dark:text-blue-300 block mb-0.5">Uso permitido</span>
+                        <p className="text-sm text-blue-700 dark:text-blue-300 leading-relaxed">{resource.permitted_use}</p>
+                      </div>
+                    </div>
+                  )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">
                     <div className="p-4 rounded-xl bg-gray-50 dark:bg-[#1D1D1D] flex items-center gap-4">

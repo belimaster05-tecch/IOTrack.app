@@ -31,6 +31,7 @@ function NewResourceInner() {
   const [sku, setSku] = useState('');
   const [category, setCategory] = useState(''); // This will store the UUID
   const [description, setDescription] = useState('');
+  const [permittedUse, setPermittedUse] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [warehouseQuantity, setWarehouseQuantity] = useState('0');
   const [unitPrefix, setUnitPrefix] = useState('');
@@ -87,6 +88,7 @@ function NewResourceInner() {
           setName(data.name || '');
           setSku(data.sku || '');
           setDescription(data.description || '');
+          setPermittedUse(data.permitted_use ?? '');
           setQuantity((data.initial_quantity || 1).toString());
           setWarehouseQuantity((data.warehouse_quantity ?? 0).toString());
           setOwnershipType(data.ownership_type || 'general');
@@ -195,6 +197,7 @@ function NewResourceInner() {
         owner_name: ownerName,
         owner_user_id: ownershipType === 'personal' ? (ownerUserId || null) : null,
         requires_approval: requiresApproval,
+        permitted_use: permittedUse || null,
         organization_id: profile.organization_id,
         status: 'available'
       };
@@ -425,6 +428,19 @@ function NewResourceInner() {
                   className="w-full px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow min-h-[120px] resize-y placeholder:text-gray-400 dark:placeholder:text-[#555]"
                   placeholder="Describe las características principales del recurso..."
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-[#C8C8C6] mb-1">
+                  Uso permitido <span className="text-gray-400 dark:text-[#555] font-normal">(opcional)</span>
+                </label>
+                <textarea
+                  value={permittedUse}
+                  onChange={(e) => setPermittedUse(e.target.value)}
+                  className="w-full px-3 py-2 bg-white dark:bg-[#1D1D1D] border border-gray-300 dark:border-[#444] rounded-md text-sm dark:text-[#E8E8E6] focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-[#E8E8E6] focus:border-transparent transition-shadow min-h-[80px] resize-y placeholder:text-gray-400 dark:placeholder:text-[#555]"
+                  placeholder="Ej: Solo uso académico en aulas. No se permite uso externo."
+                />
+                <p className="text-xs text-gray-400 dark:text-[#555] mt-1">Visible para los usuarios al ver el recurso</p>
               </div>
             </div>
           </div>

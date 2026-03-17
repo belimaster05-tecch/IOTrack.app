@@ -82,7 +82,7 @@ export function Settings() {
       const { error: uploadError } = await supabase.storage.from('Avatar').upload(path, file, { upsert: true, contentType: file.type });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from('Avatar').getPublicUrl(path);
-      const publicUrl = urlData.publicUrl;
+      const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
       const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
       if (updateError) throw updateError;
       await refreshAuthState();

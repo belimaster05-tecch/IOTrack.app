@@ -17,6 +17,7 @@ import {
   Sparkles,
   Layers,
   ChevronDown,
+  Info,
 } from 'lucide-react';
 import { getCategoryIconComponent } from '@/lib/categoryIcons';
 import { Button } from '@/components/ui/Button';
@@ -229,6 +230,12 @@ export function Resources() {
               <span className="inline-flex items-center gap-1">
                 <MapPin className="h-3 w-3 shrink-0" />
                 <span className="truncate max-w-[120px]">{resource.locations.name}</span>
+              </span>
+            )}
+            {resource.permitted_use && (
+              <span className="inline-flex items-center gap-1 text-blue-500 dark:text-blue-400" title={resource.permitted_use}>
+                <Info className="h-3 w-3 shrink-0" />
+                <span className="truncate max-w-[100px]">{resource.permitted_use}</span>
               </span>
             )}
             {condTags.slice(0, 1).map((rct: any) => {

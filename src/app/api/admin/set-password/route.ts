@@ -52,13 +52,15 @@ export async function POST(request: Request) {
       { auth: { autoRefreshToken: false, persistSession: false } }
     )
 
-    const { data: targetProfile } = await supabaseAdmin
-      .from('profiles')
+    const { data: targetMembership } = await supabaseAdmin
+      .from('organization_memberships')
       .select('organization_id')
-      .eq('id', userId)
-      .single()
+      .eq('user_id', userId)
+      .eq('organization_id', callerOrgId)
+      .eq('status', 'active')
+      .maybeSingle()
 
-    if (!targetProfile || targetProfile.organization_id !== callerOrgId) {
+    if (!targetMembership) {
       return NextResponse.json({ error: 'No puedes modificar usuarios de otra organización.' }, { status: 403 })
     }
 
