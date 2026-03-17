@@ -49,6 +49,47 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
+// ─── SessionStorage cache ────────────────────────────────────────────────────
+// Stores hydrated auth state so subsequent full reloads don't show a spinner.
+// Cache is keyed by user ID and expires after 10 minutes.
+const CACHE_KEY = 'iotrack_auth_v1';
+const CACHE_TTL = 10 * 60 * 1000;
+
+interface CachedAuth {
+  uid: string;
+  ts: number;
+  profile: Profile | null;
+  memberships: any[];
+  activeMembership: any | null;
+  organizationId: string | null;
+  organizationLogoUrl: string | null;
+  membershipRole: string | null;
+}
+
+function readAuthCache(uid: string): CachedAuth | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const c: CachedAuth = JSON.parse(raw);
+    if (c.uid !== uid || Date.now() - c.ts > CACHE_TTL) return null;
+    return c;
+  } catch { return null; }
+}
+
+function writeAuthCache(uid: string, data: Omit<CachedAuth, 'uid' | 'ts'>) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ...data, uid, ts: Date.now() }));
+  } catch {}
+}
+
+function clearAuthCache() {
+  if (typeof window === 'undefined') return;
+  try { sessionStorage.removeItem(CACHE_KEY); } catch {}
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -63,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resetUserState = useCallback(() => {
     clearStoreCache();
+    clearAuthCache();
     setProfile(null);
     setMemberships([]);
     setActiveMembership(null);
@@ -71,20 +113,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setMembershipRole(null);
   }, []);
 
-  const hydrateUserContext = useCallback(async (currentUser: User | null) => {
+  const applyState = useCallback((data: Omit<CachedAuth, 'uid' | 'ts'>) => {
+    setProfile(data.profile);
+    setMemberships(data.memberships);
+    setActiveMembership(data.activeMembership);
+    setOrganizationId(data.organizationId);
+    setOrganizationLogoUrl(data.organizationLogoUrl);
+    setMembershipRole(data.membershipRole as MembershipRole | null);
+  }, []);
+
+  // Returns true if ctx has usable data (non-empty profile or membership)
+  const isCtxUsable = (ctx: any) =>
+    ctx && (ctx.profile?.id || ctx.membership?.user_id);
+
+  const hydrateUserContext = useCallback(async (currentUser: User | null, { silent = false } = {}) => {
     if (!currentUser) {
       resetUserState();
       return;
     }
 
     try {
-      // Use SECURITY DEFINER RPC — bypasses RLS entirely, avoids silent failures
-      // when auth.uid() isn't attached to the JWT during brief post-login race conditions.
       let { data: ctx, error: ctxError } = await supabase.rpc('get_my_context');
 
-      // Retry once after 800ms — handles brief post-login JWT propagation delays
-      if ((ctxError || !ctx) && mountedRef.current) {
-        await new Promise(r => setTimeout(r, 800));
+      // Retry after 300ms if RPC failed OR returned empty data
+      if ((!isCtxUsable(ctx) || ctxError) && mountedRef.current) {
+        await new Promise(r => setTimeout(r, 300));
         const retry = await supabase.rpc('get_my_context');
         ctx = retry.data;
         ctxError = retry.error;
@@ -92,8 +145,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!mountedRef.current) return;
 
-      if (ctxError || !ctx) {
-        // RPC still not available — fall back to direct queries
+      if (!isCtxUsable(ctx) || ctxError) {
+        // Fallback to direct queries
         const [profileResult, membershipsResult] = await Promise.all([
           supabase.from('profiles').select('*').eq('id', currentUser.id).single(),
           supabase
@@ -122,25 +175,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (!mountedRef.current) return;
 
-        const profileWithOrg = profileRow
-          ? { ...profileRow, organizations: orgName ? { name: orgName } : null }
-          : null;
         const fallbackRole =
           profileRow?.role_name === 'admin' ? 'admin'
           : profileRow?.role_name === 'approver' ? 'approver'
           : profileRow?.role_name ? 'member'
           : null;
 
-        setProfile((profileWithOrg as Profile) ?? null);
-        setMemberships(membershipRows);
-        setActiveMembership(resolvedMembership);
-        setOrganizationId(orgId);
-        setOrganizationLogoUrl(orgLogoUrl);
-        setMembershipRole((resolvedMembership?.role as MembershipRole | undefined) || (fallbackRole as MembershipRole | null));
+        const profileWithOrg = profileRow
+          ? { ...profileRow, organizations: orgName ? { name: orgName } : null }
+          : null;
+
+        const stateData = {
+          profile: (profileWithOrg as Profile) ?? null,
+          memberships: membershipRows,
+          activeMembership: resolvedMembership,
+          organizationId: orgId,
+          organizationLogoUrl: orgLogoUrl,
+          membershipRole: (resolvedMembership?.role ?? fallbackRole) as MembershipRole | null,
+        };
+        applyState(stateData);
+        if (profileRow) writeAuthCache(currentUser.id, stateData);
         return;
       }
 
-      // RPC succeeded — parse results
+      // RPC succeeded
       const profileRow = ctx.profile ?? null;
       const membership = ctx.membership?.user_id ? ctx.membership : null;
       const orgName: string | null = ctx.org_name ?? null;
@@ -156,25 +214,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : profileRow?.role_name ? 'member'
         : null;
 
-      const allMemberships = membership ? [membership] : [];
-
-      setProfile((profileWithOrg as Profile) ?? null);
-      setMemberships(allMemberships);
-      setActiveMembership(membership);
-      setOrganizationId(orgId);
-      setOrganizationLogoUrl(ctx.org_logo_url ?? null);
-      setMembershipRole((membership?.role as MembershipRole | undefined) || (fallbackRole as MembershipRole | null));
+      const stateData = {
+        profile: (profileWithOrg as Profile) ?? null,
+        memberships: membership ? [membership] : [],
+        activeMembership: membership,
+        organizationId: orgId,
+        organizationLogoUrl: ctx.org_logo_url ?? null,
+        membershipRole: ((membership?.role ?? fallbackRole) as MembershipRole | null),
+      };
+      applyState(stateData);
+      if (profileRow) writeAuthCache(currentUser.id, stateData);
     } catch {
-      // Don't reset state on transient errors — the session is still valid.
-      // The user will see stale data rather than being logged out unexpectedly.
       if (!mountedRef.current) return;
+      // Don't reset state on transient errors — show stale data rather than blank
     }
-  }, [resetUserState]);
+  }, [resetUserState, applyState]);
 
   const refreshAuthState = useCallback(async () => {
     setLoading(true);
     try {
-      // Timeout so a hanging getSession() never blocks forever
       const sessionResult = await Promise.race([
         supabase.auth.getSession(),
         new Promise<never>((_, reject) =>
@@ -199,24 +257,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     mountedRef.current = true;
 
-    // Hard fallback: if nothing resolves in 8s, stop showing spinner
+    // Hard fallback: never spin forever
     const fallback = setTimeout(() => {
       if (mountedRef.current) setLoading(false);
     }, 8000);
 
-    // onAuthStateChange fires INITIAL_SESSION immediately with the current session,
-    // and also fires SIGNED_IN after Supabase processes any hash-based auth tokens.
-    // We rely on it exclusively so we never call getSession() concurrently with
-    // hash processing, which would cause "Lock stolen" AbortErrors.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
       if (!mountedRef.current) return;
-      if (event === 'SIGNED_OUT' || event === 'SIGNED_IN') {
+
+      if (event === 'SIGNED_OUT') {
         clearStoreCache();
+        clearAuthCache();
+        setSession(null);
+        setUser(null);
+        resetUserState();
+        setLoading(false);
+        return;
       }
+
+      if (event === 'SIGNED_IN') {
+        clearStoreCache();
+        clearAuthCache();
+      }
+
       setSession(currentSession);
       setUser(currentSession?.user ?? null);
+
+      // ── Fast path: serve from cache on INITIAL_SESSION ──────────────────
+      // This eliminates the spinner on subsequent full page reloads.
+      if (event === 'INITIAL_SESSION' && currentSession?.user) {
+        const cached = readAuthCache(currentSession.user.id);
+        if (cached) {
+          applyState(cached);
+          setLoading(false);
+          clearTimeout(fallback);
+          // Still revalidate in background (don't set loading = true again)
+          void hydrateUserContext(currentSession.user, { silent: true });
+          return;
+        }
+      }
+
       await hydrateUserContext(currentSession?.user ?? null);
       if (mountedRef.current) setLoading(false);
+      clearTimeout(fallback);
     });
 
     return () => {
@@ -224,7 +307,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(fallback);
       subscription.unsubscribe();
     };
-  }, [hydrateUserContext]);
+  }, [hydrateUserContext, resetUserState, applyState]);
 
   const signOut = async () => {
     await supabase.auth.signOut();

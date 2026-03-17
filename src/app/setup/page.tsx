@@ -4,6 +4,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase/client';
 
+// Clear auth cache so middleware reads fresh has_password on next load
+function clearAuthCache() {
+  try { sessionStorage.removeItem('iotrack_auth_v1'); } catch {}
+}
+
 export default function SetupPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
@@ -72,7 +77,8 @@ export default function SetupPage() {
           .eq('id', user.id);
       }
 
-      // Full reload so the middleware reads the refreshed session (updated has_password cookie)
+      // Clear cache + full reload so middleware reads the refreshed session (updated has_password)
+      clearAuthCache();
       window.location.href = '/dashboard';
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error al guardar.');
