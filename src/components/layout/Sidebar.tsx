@@ -218,11 +218,11 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
           {/* User card */}
           <div className="mt-3 flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-gray-50 dark:bg-[#252525]">
             <Image
-              src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.user_metadata?.full_name || 'U')}&background=059669&color=fff&size=64`}
+              src={profile?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.full_name || user?.user_metadata?.full_name || 'U')}&background=059669&color=fff&size=64`}
               alt="User"
               width={28}
               height={28}
-              className="w-7 h-7 rounded-full shrink-0"
+              className="w-7 h-7 rounded-full shrink-0 object-cover"
               unoptimized
             />
             <div className="flex-1 min-w-0">

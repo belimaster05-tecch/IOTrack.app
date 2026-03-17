@@ -32,6 +32,7 @@ interface AuthContextType {
   membershipRole: MembershipRole | null;
   loading: boolean;
   refreshAuthState: () => Promise<void>;
+  updateProfileAvatar: (url: string) => void;
   signOut: () => Promise<void>;
 }
 
@@ -46,6 +47,7 @@ const AuthContext = createContext<AuthContextType>({
   membershipRole: null,
   loading: true,
   refreshAuthState: async () => {},
+  updateProfileAvatar: () => {},
   signOut: async () => {},
 });
 
@@ -309,6 +311,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [hydrateUserContext, resetUserState, applyState]);
 
+  /** Updates avatar_url in profile state + cache without triggering a full reload */
+  const updateProfileAvatar = useCallback((url: string) => {
+    setProfile((prev) => prev ? { ...prev, avatar_url: url } : prev);
+    if (user) {
+      const cached = readAuthCache(user.id);
+      if (cached) writeAuthCache(user.id, { ...cached, profile: cached.profile ? { ...cached.profile, avatar_url: url } : cached.profile });
+    }
+  }, [user]);
+
   const signOut = async () => {
     await supabase.auth.signOut();
   };
@@ -326,6 +337,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         membershipRole,
         loading,
         refreshAuthState,
+        updateProfileAvatar,
         signOut,
       }}
     >

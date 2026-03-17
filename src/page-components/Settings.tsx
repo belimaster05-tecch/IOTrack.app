@@ -36,7 +36,7 @@ function toJpegBlob(file: File): Promise<Blob> {
 }
 
 export function Settings() {
-  const { user, refreshAuthState, organizationId } = useAuth();
+  const { user, refreshAuthState, updateProfileAvatar, organizationId } = useAuth();
   const { role } = useRole();
   const { features, updateFeature } = useFeatures();
   const isAdmin = role === 'admin';
@@ -106,9 +106,9 @@ export function Settings() {
       const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
       const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
       if (updateError) throw updateError;
-      // Update local state immediately so the UI reflects the new avatar without reload
+      // Update both local state and global auth context without triggering loading/flash
       setProfileData((prev: any) => prev ? { ...prev, avatar_url: publicUrl } : prev);
-      await refreshAuthState();
+      updateProfileAvatar(publicUrl);
       toast.success('Foto de perfil actualizada');
     } catch (err: any) {
       toast.error('Error al subir la foto: ' + err.message);
