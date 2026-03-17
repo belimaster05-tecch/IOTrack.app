@@ -255,7 +255,7 @@ export function Reports() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'reportes_invtrack.csv';
+      a.download = 'reportes_iotrack.csv';
       a.click();
       URL.revokeObjectURL(url);
       setMessage('Exportación CSV completada');

@@ -17,7 +17,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           <div className="w-7 h-7 rounded-lg bg-gray-900 dark:bg-[#E8E8E6] flex items-center justify-center">
             <span className="text-white dark:text-[#191919] font-bold text-xs">IT</span>
           </div>
-          <h1 className="font-semibold text-sm text-gray-900 dark:text-[#E8E8E6]">InvTrack</h1>
+          <h1 className="font-semibold text-sm text-gray-900 dark:text-[#E8E8E6]">IOTrack</h1>
         </div>
       </div>
 

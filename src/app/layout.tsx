@@ -7,7 +7,7 @@ import { FeaturesProvider } from '@/contexts/FeaturesContext'
 import { Toaster } from 'sonner'
 
 export const metadata: Metadata = {
-  title: 'InvTrack',
+  title: 'IOTrack',
   description: 'Gestión de recursos e inventario',
 }
 

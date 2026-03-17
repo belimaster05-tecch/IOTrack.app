@@ -133,7 +133,7 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
             )}
             <div className="min-w-0 flex-1">
               <h2 className="font-semibold text-sm text-gray-900 dark:text-[#E8E8E6] leading-tight truncate">{orgName}</h2>
-              <p className="text-[10px] text-gray-400 dark:text-[#555] tracking-wide">InvTrack · {roleLabel}</p>
+              <p className="text-[10px] text-gray-400 dark:text-[#555] tracking-wide">IOTrack · {roleLabel}</p>
             </div>
           </div>
 
