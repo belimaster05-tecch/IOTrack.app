@@ -1,31 +1,16 @@
 'use client'
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeftRight,
-  Calendar,
   ChevronDown,
-  ClipboardList,
-  Clock,
-  Hash,
-  LayoutGrid,
-  List,
-  MapPin,
-  Package,
-  PlusCircle,
+  ChevronRight,
+  Filter,
   RotateCcw,
   Search,
   Send,
-  ShieldCheck,
-  ShoppingBag,
-  Tag,
-  UserCircle,
   Users2,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
-import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
 import { useProfile, useRequests, useLoans, useResources, useUsers } from '@/lib/hooks';
@@ -34,57 +19,13 @@ import { getCatalogVisibility } from '@/lib/resourceVisibility';
 import { formatTimeRange } from '@/lib/scheduling';
 import { cn } from '@/lib/utils';
 
-const SECTION_ACCENT: Record<string, string> = {
-  requests: '#3B82F6',
-  loans: '#B0894F',
-  consumables: '#8B5CF6',
-  assigned: '#10B981',
-  lending: '#6366F1',
-};
-
-const COLUMN_STYLES = {
-  requests: {
-    shell: 'bg-white dark:bg-[#242424]',
-    card: 'bg-[#F7F7F6] hover:bg-[#F2F2F1] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]',
-    accent: 'bg-[#3B82F6]',
-    badge: 'bg-white/70 text-[#3159B8] border-white/70 dark:bg-white/10 dark:text-[#A7C0FF] dark:border-white/10',
-  },
-  loans: {
-    shell: 'bg-white dark:bg-[#242424]',
-    card: 'bg-[#F7F7F6] hover:bg-[#F2F2F1] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]',
-    accent: 'bg-[#B0894F]',
-    badge: 'bg-white/70 text-[#8C6632] border-white/70 dark:bg-white/10 dark:text-[#E7C38E] dark:border-white/10',
-  },
-  consumables: {
-    shell: 'bg-white dark:bg-[#242424]',
-    card: 'bg-[#F7F7F6] hover:bg-[#F2F2F1] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]',
-    accent: 'bg-[#8B5CF6]',
-    badge: 'bg-white/70 text-[#6C47C6] border-white/70 dark:bg-white/10 dark:text-[#C4B0FF] dark:border-white/10',
-  },
-  assigned: {
-    shell: 'bg-white dark:bg-[#242424]',
-    card: 'bg-[#F7F7F6] hover:bg-[#F2F2F1] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]',
-    accent: 'bg-[#F59E0B]',
-    badge: 'bg-white/70 text-[#A56B00] border-white/70 dark:bg-white/10 dark:text-[#F7C978] dark:border-white/10',
-  },
-  lending: {
-    shell: 'bg-white dark:bg-[#242424]',
-    card: 'bg-[#F7F7F6] hover:bg-[#F2F2F1] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]',
-    accent: 'bg-[#6366F1]',
-    badge: 'bg-white/70 text-[#4F46E5] border-white/70 dark:bg-white/10 dark:text-[#A5B4FC] dark:border-white/10',
-  },
-} as const;
-
-function EmptyColumn({
-  text,
-}: {
-  text: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-dashed border-black/10 bg-white/30 px-4 py-8 text-center text-sm text-gray-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-[#787774]">
-      {text}
-    </div>
-  );
+function daysRemaining(dueDate: string): { label: string; color: string } {
+  const today = new Date().toISOString().split('T')[0];
+  const diff = Math.ceil((new Date(dueDate).getTime() - new Date(today).getTime()) / 86400000);
+  if (diff < 0) return { label: `${Math.abs(diff)}d vencido`, color: 'text-red-500 dark:text-red-400' };
+  if (diff === 0) return { label: 'Vence hoy', color: 'text-amber-500 dark:text-amber-400' };
+  if (diff <= 3) return { label: `${diff}d restantes`, color: 'text-amber-500 dark:text-amber-400' };
+  return { label: `${diff}d`, color: 'text-gray-400 dark:text-[#555]' };
 }
 
 export function MyResources() {
@@ -96,7 +37,9 @@ export function MyResources() {
   const { resources, loading: loadingResources } = useResources();
   const { users: orgUsers } = useUsers(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
+  const [activeTab, setActiveTab] = useState<'all' | 'requests' | 'loans' | 'consumables' | 'assigned' | 'lending'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'active' | 'overdue'>('all');
+  const [filterOpen, setFilterOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
     requests: false,
     loans: false,
@@ -117,6 +60,18 @@ export function MyResources() {
   const [lendDueDate, setLendDueDate] = useState('');
   const [lendNotes, setLendNotes] = useState('');
   const [lendSubmitting, setLendSubmitting] = useState(false);
+
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     const fetchConsumableActivity = async () => {
@@ -228,22 +183,30 @@ export function MyResources() {
   const myLoans = useMemo(() => loans.filter((l) => l.user_id === user?.id && l.status !== 'returned'), [loans, user?.id]);
 
   const filteredRequests = useMemo(() => {
-    if (!searchQuery.trim()) return myRequests;
+    let items = myRequests;
+    if (statusFilter !== 'all') {
+      items = items.filter((r) => r.status === statusFilter);
+    }
+    if (!searchQuery.trim()) return items;
     const q = searchQuery.toLowerCase();
-    return myRequests.filter(
+    return items.filter(
       (r) => r.resources?.name?.toLowerCase().includes(q) || r.notes?.toLowerCase().includes(q)
     );
-  }, [myRequests, searchQuery]);
+  }, [myRequests, searchQuery, statusFilter]);
 
   const filteredLoans = useMemo(() => {
-    if (!searchQuery.trim()) return myLoans;
+    let items = myLoans;
+    if (statusFilter !== 'all') {
+      items = items.filter((l) => l.status === statusFilter);
+    }
+    if (!searchQuery.trim()) return items;
     const q = searchQuery.toLowerCase();
-    return myLoans.filter(
+    return items.filter(
       (l) =>
         l.resource_units?.resources?.name?.toLowerCase().includes(q) ||
         l.resource_units?.serial_number?.toLowerCase().includes(q)
     );
-  }, [myLoans, searchQuery]);
+  }, [myLoans, searchQuery, statusFilter]);
 
   const filteredConsumables = useMemo(() => {
     if (!searchQuery.trim()) return consumableActivity;
@@ -281,646 +244,496 @@ export function MyResources() {
     );
   }, [assignedResources, searchQuery]);
 
+  const filteredPersonalLoans = useMemo(() => {
+    if (!searchQuery.trim()) return personalLoans;
+    const q = searchQuery.toLowerCase();
+    return personalLoans.filter(
+      (loan) =>
+        loan.resource_units?.resources?.name?.toLowerCase().includes(q) ||
+        loan.resource_units?.serial_number?.toLowerCase().includes(q) ||
+        loan.profiles?.full_name?.toLowerCase().includes(q) ||
+        loan.profiles?.email?.toLowerCase().includes(q)
+    );
+  }, [personalLoans, searchQuery]);
+
   const loading = loadingRequests || loadingLoans || loadingConsumables || loadingResources || loadingPersonal;
-  const summaryCount = filteredRequests.length + filteredLoans.length + filteredConsumables.length + filteredAssignedResources.length + personalLoans.length;
+
+  const totalCount =
+    filteredRequests.length +
+    filteredLoans.length +
+    filteredConsumables.length +
+    filteredAssignedResources.length +
+    filteredPersonalLoans.length;
+
   const toggleSection = (section: string) => {
     setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
-  const renderListShell = (
-    key: string,
-    title: string,
-    count: number,
-    icon: ReactNode,
-    children: ReactNode
-  ) => (
-    <div key={key} className="overflow-hidden rounded-xl border border-black/[0.06] bg-white dark:border-white/[0.05] dark:bg-[#242424]">
-      <button
-        type="button"
-        onClick={() => toggleSection(key)}
-        className="flex w-full cursor-pointer items-center gap-2.5 border-b border-black/[0.04] px-4 py-2.5 text-left transition-colors hover:bg-black/[0.015] dark:border-white/[0.04] dark:hover:bg-white/[0.02]"
-      >
-        <span
-          className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-          style={{ backgroundColor: SECTION_ACCENT[key] ?? '#9CA3AF' }}
-        />
-        <span className="text-sm font-medium text-gray-700 dark:text-[#C8C8C6]">{title}</span>
-        <span className="rounded-[5px] bg-black/[0.05] px-1.5 py-0.5 text-xs text-gray-500 dark:bg-white/[0.07] dark:text-[#787774]">{count}</span>
-        <ChevronDown className={cn('ml-auto h-3.5 w-3.5 text-gray-400 transition-transform dark:text-[#555]', !collapsedSections[key] && 'rotate-180')} />
-      </button>
-      {!collapsedSections[key] && <div>{children}</div>}
+  const colHeader = (labels: string[], cols: string) => (
+    <div className={cn('grid border-b border-black/[0.04] dark:border-white/[0.04] bg-[#FAFAFA] dark:bg-[#161616]', cols)}>
+      {labels.map((h, i) => (
+        <div
+          key={h}
+          className={cn(
+            'flex items-center gap-1 px-4 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-gray-400 dark:text-[#555]',
+            i === 0 && 'border-r border-black/[0.04] dark:border-white/[0.04]'
+          )}
+        >
+          {h}
+        </div>
+      ))}
     </div>
   );
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
-      <section className="rounded-[30px] bg-transparent">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-          <div className="max-w-3xl">
-            <h1 className="text-3xl font-semibold tracking-tight text-gray-900 dark:text-[#E8E8E6]">A mi disposición</h1>
-            <p className="mt-2 max-w-2xl text-sm text-gray-500 dark:text-[#787774]">
-              Revisa tus solicitudes, recursos en uso, consumibles retirados y asignaciones fijas desde un solo lugar.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="inline-flex items-center gap-2 rounded-full bg-black/[0.03] px-3 py-2 text-sm text-gray-600 dark:bg-white/[0.04] dark:text-[#C8C8C6]">
-              <Package className="h-4 w-4" />
-              {summaryCount} registros visibles
-            </div>
-            <div className="inline-flex items-center gap-1 rounded-full bg-black/[0.03] p-1 dark:bg-white/[0.04]">
-              <button
-                type="button"
-                onClick={() => setViewMode('board')}
-                className={cn('rounded-full px-3 py-2 text-sm transition-colors', viewMode === 'board' ? 'bg-white text-gray-900 dark:bg-[#242424] dark:text-[#E8E8E6]' : 'text-gray-500 dark:text-[#787774]')}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('list')}
-                className={cn('rounded-full px-3 py-2 text-sm transition-colors', viewMode === 'list' ? 'bg-white text-gray-900 dark:bg-[#242424] dark:text-[#E8E8E6]' : 'text-gray-500 dark:text-[#787774]')}
-              >
-                <List className="h-4 w-4" />
-              </button>
-            </div>
-            <Button variant="primary" className="bg-black text-white hover:bg-gray-800 shrink-0" onClick={() => router.push('/solicitar')}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Solicitar recurso
-            </Button>
-          </div>
+    <div className="mx-auto max-w-5xl space-y-6 pb-12">
+      {/* Page header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-[#E8E8E6]">A mi disposición</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-[#787774]">
+            Revisa tus solicitudes, recursos activos y préstamos personales.
+          </p>
         </div>
-
-        <div className="mt-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="relative w-full max-w-xl">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-[#555]" />
-            <Input
-              placeholder="Buscar por recurso, serie, motivo o ubicación..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-[#787774]">
-            <span className="rounded-full bg-black/[0.03] px-3 py-1.5 dark:bg-white/[0.04]">Solicitudes {filteredRequests.length}</span>
-            <span className="rounded-full bg-black/[0.03] px-3 py-1.5 dark:bg-white/[0.04]">En uso {filteredLoans.length}</span>
-            <span className="rounded-full bg-black/[0.03] px-3 py-1.5 dark:bg-white/[0.04]">Consumibles {filteredConsumables.length}</span>
-            <span className="rounded-full bg-black/[0.03] px-3 py-1.5 dark:bg-white/[0.04]">Asignados {filteredAssignedResources.length}</span>
-          </div>
-        </div>
-      </section>
-
-      {!loading && summaryCount === 0 && !searchQuery ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-          <div className="w-12 h-12 rounded-xl bg-gray-100 dark:bg-[#252525] flex items-center justify-center">
-            <UserCircle className="w-6 h-6 text-gray-400 dark:text-[#555]" />
-          </div>
-          <p className="font-medium text-gray-900 dark:text-[#E8E8E6] text-sm">No tienes recursos asignados</p>
-          <p className="text-xs text-gray-400 dark:text-[#555]">Los recursos que te sean asignados aparecerán aquí.</p>
-        </div>
-      ) : viewMode === 'board' ? (
-      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-5">
-        <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', COLUMN_STYLES.requests.shell)}>
-          <button type="button" onClick={() => toggleSection('requests')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
-            <div className="flex items-center gap-2">
-            <ClipboardList className="h-4 w-4 text-gray-700 dark:text-[#E8E8E6]" />
-            <h2 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">Mis solicitudes</h2>
-            <Badge className={COLUMN_STYLES.requests.badge}>{myRequests.length}</Badge>
-            </div>
-            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform dark:text-[#787774]', !collapsedSections.requests && 'rotate-180')} />
-          </button>
-          {!collapsedSections.requests && (
-          <div className="space-y-3">
-            {loading ? (
-              <EmptyColumn text="Cargando solicitudes..." />
-            ) : filteredRequests.length === 0 ? (
-              <EmptyColumn text="No tienes solicitudes por ahora." />
-            ) : (
-              filteredRequests.map((req) => (
-                <Card
-                  key={req.id}
-                  className={cn('cursor-pointer p-4 shadow-none transition-colors', COLUMN_STYLES.requests.card)}
-                  onClick={() => router.push('/solicitudes')}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">{req.resources?.name ?? 'Recurso'}</h3>
-                      <p className="mt-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                        {req.quantity > 1 ? `Cantidad ${req.quantity} · ` : ''}
-                        {new Date(req.created_at).toLocaleDateString('es-ES')}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      {req.status === 'pending' && <Badge variant="warning">Pendiente</Badge>}
-                      {req.status === 'approved' && <Badge variant="success">Aprobado</Badge>}
-                      {req.status === 'rejected' && <Badge variant="error">Rechazado</Badge>}
-                    </div>
-                  </div>
-                  {(req.resources?.locations?.name || req.notes) && (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-xs text-gray-600 dark:text-[#AAAAAA]">
-                        Horario: {formatTimeRange(req.start_time, req.end_time)}
-                      </p>
-                      {req.resources?.locations?.name && (
-                        <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                          <MapPin className="h-3 w-3" /> Devolver en: {req.resources.locations.name}
-                        </p>
-                      )}
-                      {req.notes && <p className="line-clamp-2 text-xs text-gray-600 dark:text-[#AAAAAA]">{req.notes}</p>}
-                    </div>
-                  )}
-                </Card>
-              ))
-            )}
-          </div>
-          )}
-        </section>
-
-        <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', COLUMN_STYLES.loans.shell)}>
-          <button type="button" onClick={() => toggleSection('loans')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
-            <div className="flex items-center gap-2">
-            <ArrowLeftRight className="h-4 w-4 text-gray-700 dark:text-[#E8E8E6]" />
-            <h2 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">Recursos en uso</h2>
-            <Badge className={COLUMN_STYLES.loans.badge}>{myLoans.length}</Badge>
-            </div>
-            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform dark:text-[#787774]', !collapsedSections.loans && 'rotate-180')} />
-          </button>
-          {!collapsedSections.loans && (
-          <div className="space-y-3">
-            {loading ? (
-              <EmptyColumn text="Cargando préstamos..." />
-            ) : filteredLoans.length === 0 ? (
-              <EmptyColumn text="No tienes recursos en uso." />
-            ) : (
-              filteredLoans.map((loan) => {
-                const isOverdue = loan.status === 'overdue';
-                const dueToday = loan.due_date === new Date().toISOString().split('T')[0];
-                return (
-                  <Card
-                    key={loan.id}
-                    className={cn('cursor-pointer p-4 shadow-none transition-colors', COLUMN_STYLES.loans.card)}
-                    onClick={() => router.push('/solicitudes')}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">{loan.resource_units?.resources?.name ?? 'Recurso'}</h3>
-                        <p className="mt-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                          {loan.resource_units?.serial_number ? `${loan.resource_units.serial_number} · ` : ''}
-                          Vence {new Date(loan.due_date).toLocaleDateString('es-ES')}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 flex-wrap gap-2">
-                        {isOverdue && <Badge variant="error">Vencido</Badge>}
-                        {dueToday && !isOverdue && <Badge variant="warning">Vence hoy</Badge>}
-                        {loan.status === 'active' && !dueToday && <Badge variant="success">En uso</Badge>}
-                      </div>
-                    </div>
-                    {loan.resource_units?.resources?.locations?.name && (
-                      <p className="mt-3 flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                        <MapPin className="h-3 w-3" /> Devolver en: {loan.resource_units.resources.locations.name}
-                      </p>
-                    )}
-                    <p className="mt-2 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                      Hora prevista: {formatTimeRange(undefined, loan.requests?.end_time)}
-                    </p>
-                  </Card>
-                );
-              })
-            )}
-          </div>
-          )}
-        </section>
-
-        <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', COLUMN_STYLES.consumables.shell)}>
-          <button type="button" onClick={() => toggleSection('consumables')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
-            <div className="flex items-center gap-2">
-            <ShoppingBag className="h-4 w-4 text-gray-700 dark:text-[#E8E8E6]" />
-            <h2 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">Retiros consumibles</h2>
-            <Badge className={COLUMN_STYLES.consumables.badge}>{consumableActivity.length}</Badge>
-            </div>
-            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform dark:text-[#787774]', !collapsedSections.consumables && 'rotate-180')} />
-          </button>
-          {!collapsedSections.consumables && (
-          <div className="space-y-3">
-            {loading ? (
-              <EmptyColumn text="Cargando retiros..." />
-            ) : filteredConsumables.length === 0 ? (
-              <EmptyColumn text="Aún no has retirado consumibles." />
-            ) : (
-              filteredConsumables.map((entry) => (
-                <Card
-                  key={entry.id}
-                  className={cn('cursor-pointer p-4 shadow-none transition-colors', COLUMN_STYLES.consumables.card)}
-                  onClick={() => router.push(`/recursos/${entry.entity_id}`)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">{entry.details?.resource_name ?? 'Consumible'}</h3>
-                      <p className="mt-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                        Cantidad {entry.details?.quantity ?? 0} · {new Date(entry.created_at).toLocaleDateString('es-ES')}
-                      </p>
-                    </div>
-                    <Badge variant="info">Retirado</Badge>
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    {entry.details?.use_location && (
-                      <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                        <MapPin className="h-3 w-3" /> {entry.details.use_location}
-                      </p>
-                    )}
-                    {entry.details?.notes && <p className="line-clamp-2 text-xs text-gray-600 dark:text-[#AAAAAA]">{entry.details.notes}</p>}
-                  </div>
-                </Card>
-              ))
-            )}
-          </div>
-          )}
-        </section>
-
-        <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', COLUMN_STYLES.assigned.shell)}>
-          <button type="button" onClick={() => toggleSection('assigned')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
-            <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-gray-700 dark:text-[#E8E8E6]" />
-            <h2 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">Mis recursos asignados</h2>
-            <Badge className={COLUMN_STYLES.assigned.badge}>{assignedResources.length}</Badge>
-            </div>
-            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform dark:text-[#787774]', !collapsedSections.assigned && 'rotate-180')} />
-          </button>
-          {!collapsedSections.assigned && (
-          <div className="space-y-3">
-            {loading ? (
-              <EmptyColumn text="Cargando asignaciones..." />
-            ) : filteredAssignedResources.length === 0 ? (
-              <EmptyColumn text="No tienes recursos fijos asignados." />
-            ) : (
-              filteredAssignedResources.map((resource) => (
-                <Card
-                  key={resource.id}
-                  className={cn('p-4 shadow-none transition-colors', COLUMN_STYLES.assigned.card)}
-                >
-                  <div
-                    className="flex items-start justify-between gap-3 cursor-pointer"
-                    onClick={() => router.push(`/recursos/${resource.id}`)}
-                  >
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">{resource.name}</h3>
-                      <p className="mt-1 text-xs text-gray-600 dark:text-[#AAAAAA]">{resource.sku}</p>
-                    </div>
-                    <Badge variant="warm" className="border-transparent bg-white/70 text-gray-700 dark:bg-white/10 dark:text-[#F7C978]">
-                      {getCatalogVisibility(resource) === 'internal' ? 'Fijo' : 'Área'}
-                    </Badge>
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    {resource.locations?.name && (
-                      <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                        <MapPin className="h-3 w-3" /> {resource.locations.name}
-                      </p>
-                    )}
-                    {resource.owner_name && <p className="text-xs text-gray-600 dark:text-[#AAAAAA]">Asignado a: {resource.owner_name}</p>}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => openLendModal(resource)}
-                    className="mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
-                  >
-                    <Send className="h-3 w-3" /> Prestar a un compañero
-                  </button>
-                </Card>
-              ))
-            )}
-          </div>
-          )}
-        </section>
-
-        {/* ── Préstamos dados ── */}
-        <section className={cn('h-fit self-start rounded-[28px] p-3 shadow-sm dark:ring-1 dark:ring-white/[0.03]', 'bg-white dark:bg-[#242424]')}>
-          <button type="button" onClick={() => toggleSection('lending')} className="mb-3 flex w-full items-center justify-between gap-2 px-2">
-            <div className="flex items-center gap-2">
-              <Send className="h-4 w-4 text-gray-700 dark:text-[#E8E8E6]" />
-              <h2 className="text-base font-semibold text-gray-900 dark:text-[#E8E8E6]">Préstamos dados</h2>
-              <Badge className="bg-white/70 text-[#4F46E5] border-white/70 dark:bg-white/10 dark:text-[#A5B4FC] dark:border-white/10">{personalLoans.length}</Badge>
-            </div>
-            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform dark:text-[#787774]', !collapsedSections.lending && 'rotate-180')} />
-          </button>
-          {!collapsedSections.lending && (
-            <div className="space-y-3">
-              {loadingPersonal ? (
-                <EmptyColumn text="Cargando préstamos..." />
-              ) : personalLoans.length === 0 ? (
-                <EmptyColumn text="Usa el botón 'Prestar' en tus recursos asignados." />
-              ) : (
-                personalLoans.map((loan) => {
-                  const isOverdue = loan.status === 'overdue' || (loan.due_date && loan.due_date < new Date().toISOString().split('T')[0]);
-                  const dueToday = loan.due_date === new Date().toISOString().split('T')[0];
-                  return (
-                    <Card key={loan.id} className="p-4 shadow-none bg-[#F7F7F6] dark:bg-white/[0.04]">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-900 dark:text-[#E8E8E6] truncate">{loan.resource_units?.resources?.name ?? 'Recurso'}</p>
-                          <p className="text-xs text-gray-400 dark:text-[#555]">{loan.resource_units?.serial_number}</p>
-                        </div>
-                        {isOverdue ? <Badge variant="error">Vencido</Badge> : dueToday ? <Badge variant="warning">Vence hoy</Badge> : <Badge variant="info">Activo</Badge>}
-                      </div>
-                      <div className="mt-2 space-y-1">
-                        <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                          <Users2 className="h-3 w-3" /> {loan.profiles?.full_name || loan.profiles?.email || 'Prestado a'}
-                        </p>
-                        <p className="flex items-center gap-1 text-xs text-gray-600 dark:text-[#AAAAAA]">
-                          <Calendar className="h-3 w-3" /> Vence {new Date(loan.due_date).toLocaleDateString('es-ES')}
-                        </p>
-                        {loan.notes && <p className="text-xs text-gray-500 dark:text-[#787774] italic truncate">{loan.notes}</p>}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleReturnPersonalLoan(loan.id)}
-                        className="mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#333] text-xs text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-100 dark:hover:bg-[#2A2A2A] transition-colors"
-                      >
-                        <RotateCcw className="h-3 w-3" /> Marcar devuelto
-                      </button>
-                    </Card>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </section>
+        <Button
+          onClick={() => router.push('/solicitar')}
+          variant="primary"
+          className="bg-black text-white shrink-0"
+        >
+          + Solicitar recurso
+        </Button>
       </div>
-      ) : (
-        <div className="space-y-3">
 
-          {/* ── Mis solicitudes ── */}
-          {renderListShell(
-            'requests',
-            'Mis solicitudes',
-            filteredRequests.length,
-            <ClipboardList className="h-4 w-4" />,
-            loading ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Cargando solicitudes…</p>
-            ) : filteredRequests.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">No tienes solicitudes por ahora.</p>
-            ) : (
-              <div>
-                {/* Column headers */}
-                <div className="grid grid-cols-[1fr_100px_150px_96px] border-b border-black/[0.04] dark:border-white/[0.04]">
-                  {[
-                    { icon: <ClipboardList className="h-3 w-3" />, label: 'Solicitud' },
-                    { icon: <Calendar className="h-3 w-3" />, label: 'Fecha' },
-                    { icon: <Clock className="h-3 w-3" />, label: 'Horario' },
-                    { icon: <Tag className="h-3 w-3" />, label: 'Estado' },
-                  ].map((col) => (
-                    <div key={col.label} className="flex items-center gap-1 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-400 dark:text-[#555]">
-                      {col.icon}{col.label}
-                    </div>
-                  ))}
-                </div>
-                {filteredRequests.map((req) => {
-                  const s = req.status === 'approved'
-                    ? { dot: 'bg-emerald-500', label: 'Aprobado', tx: 'text-emerald-700 dark:text-emerald-400' }
-                    : req.status === 'rejected'
-                    ? { dot: 'bg-red-500', label: 'Rechazado', tx: 'text-red-600 dark:text-red-400' }
-                    : { dot: 'bg-amber-400', label: 'Pendiente', tx: 'text-amber-700 dark:text-amber-400' };
-                  return (
+      {/* Tab bar */}
+      <div className="flex items-center gap-0 border-b border-black/[0.06] dark:border-white/[0.06]">
+        {(
+          [
+            { key: 'all', label: 'Todo', count: totalCount },
+            { key: 'requests', label: 'Solicitudes', count: filteredRequests.length },
+            { key: 'loans', label: 'En uso', count: filteredLoans.length },
+            { key: 'consumables', label: 'Consumibles', count: filteredConsumables.length },
+            { key: 'assigned', label: 'Asignados', count: filteredAssignedResources.length },
+            { key: 'lending', label: 'Préstamos dados', count: filteredPersonalLoans.length },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 transition-colors -mb-px',
+              activeTab === tab.key
+                ? 'border-gray-900 dark:border-[#E8E8E6] text-gray-900 dark:text-[#E8E8E6] font-medium'
+                : 'border-transparent text-gray-500 dark:text-[#787774] hover:text-gray-700 dark:hover:text-[#AAAAAA]'
+            )}
+          >
+            {tab.label}
+            {tab.count > 0 && (
+              <span className="text-[10px] rounded-[4px] bg-black/[0.05] dark:bg-white/[0.08] px-1.5 py-0.5 font-medium tabular-nums">
+                {tab.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Estado filter chip */}
+        <div className="relative" ref={filterRef}>
+          <button
+            onClick={() => setFilterOpen(!filterOpen)}
+            className={cn(
+              'flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-xs transition-colors',
+              statusFilter !== 'all'
+                ? 'border-gray-900 dark:border-[#E8E8E6] bg-gray-900 dark:bg-[#E8E8E6] text-white dark:text-[#191919] font-medium'
+                : 'border-black/[0.1] dark:border-white/[0.1] bg-white dark:bg-[#1D1D1D] text-gray-600 dark:text-[#AAAAAA] hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+            )}
+          >
+            <Filter className="h-3 w-3" />
+            Estado{statusFilter !== 'all' ? `: ${statusFilter}` : ' ▾'}
+          </button>
+          {filterOpen && (
+            <div className="absolute top-9 left-0 z-20 bg-white dark:bg-[#242424] border border-black/[0.08] dark:border-white/[0.08] rounded-xl shadow-lg py-1 min-w-[160px]">
+              {(
+                [
+                  { value: 'all', label: 'Todos los estados' },
+                  { value: 'pending', label: '● Pendiente' },
+                  { value: 'approved', label: '● Aprobado' },
+                  { value: 'rejected', label: '● Rechazado' },
+                  { value: 'active', label: '● En uso' },
+                  { value: 'overdue', label: '● Vencido' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => { setStatusFilter(opt.value); setFilterOpen(false); }}
+                  className={cn(
+                    'w-full text-left px-3 py-1.5 text-xs hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-colors',
+                    statusFilter === opt.value ? 'text-gray-900 dark:text-[#E8E8E6] font-medium' : 'text-gray-600 dark:text-[#AAAAAA]'
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {statusFilter !== 'all' && (
+          <button
+            onClick={() => setStatusFilter('all')}
+            className="flex items-center gap-1 h-7 px-2 rounded-md text-xs text-gray-400 hover:text-gray-600 dark:hover:text-[#AAAAAA] transition-colors"
+          >
+            × Limpiar filtros
+          </button>
+        )}
+
+        <div className="ml-auto relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-300 dark:text-[#444]" />
+          <input
+            type="text"
+            placeholder="Buscar..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-7 pl-8 pr-3 w-52 rounded-md border border-black/[0.08] dark:border-white/[0.08] bg-white dark:bg-[#1D1D1D] text-xs text-gray-900 dark:text-[#E8E8E6] placeholder-gray-300 dark:placeholder-[#444] focus:outline-none focus:border-gray-300 dark:focus:border-[#555]"
+          />
+        </div>
+      </div>
+
+      {/* Sections */}
+      <div className="space-y-3">
+
+        {/* ── Mis solicitudes ── */}
+        {(activeTab === 'all' || activeTab === 'requests') && (
+          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleSection('requests')}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+            >
+              {collapsedSections.requests
+                ? <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                : <ChevronDown className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />}
+              <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">Mis solicitudes</span>
+              <span className="text-xs text-gray-400 dark:text-[#555]">{filteredRequests.length}</span>
+              <span className="ml-auto" />
+            </button>
+
+            {!collapsedSections.requests && (
+              <>
+                {colHeader(['RECURSO', 'ESTADO', 'FECHA', 'HORARIO'], 'grid-cols-[1fr_140px_120px_100px]')}
+                {loading ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
+                ) : filteredRequests.length === 0 ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Sin registros</p>
+                ) : (
+                  filteredRequests.map((req) => (
                     <button
                       key={req.id}
                       type="button"
                       onClick={() => router.push('/solicitudes')}
-                      className="grid w-full cursor-pointer grid-cols-[1fr_100px_150px_96px] items-center border-b border-black/[0.03] text-left transition-colors last:border-0 hover:bg-[#F7F7F6] dark:border-white/[0.03] dark:hover:bg-white/[0.025]"
+                      className="w-full grid grid-cols-[1fr_140px_120px_100px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
                     >
-                      <div className="min-w-0 px-4 py-2.5">
-                        <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{req.resources?.name ?? 'Recurso'}</p>
+                      <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
+                        <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">{req.resources?.name ?? 'Recurso'}</p>
                         {req.resources?.locations?.name && (
-                          <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-gray-400 dark:text-[#555]">
-                            <MapPin className="h-2.5 w-2.5 shrink-0" />{req.resources.locations.name}
-                          </p>
+                          <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 truncate">{req.resources.locations.name}</p>
                         )}
                       </div>
-                      <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
-                        {new Date(req.created_at).toLocaleDateString('es-ES')}
-                      </p>
-                      <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                      <div className="px-4 py-2.5">
+                        {req.status === 'pending' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />Pendiente
+                          </span>
+                        )}
+                        {req.status === 'approved' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />Aprobado
+                          </span>
+                        )}
+                        {req.status === 'rejected' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-red-500 dark:text-red-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />Rechazado
+                          </span>
+                        )}
+                      </div>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                        {new Date(req.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                      </div>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
                         {formatTimeRange(req.start_time, req.end_time)}
-                      </p>
-                      <div className="px-4 py-2.5">
-                        <span className={cn('inline-flex items-center gap-1.5 text-xs', s.tx)}>
-                          <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', s.dot)} />
-                          {s.label}
-                        </span>
                       </div>
                     </button>
-                  );
-                })}
-              </div>
-            )
-          )}
+                  ))
+                )}
+              </>
+            )}
+          </div>
+        )}
 
-          {/* ── Recursos en uso ── */}
-          {renderListShell(
-            'loans',
-            'Recursos en uso',
-            filteredLoans.length,
-            <ArrowLeftRight className="h-4 w-4" />,
-            loading ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Cargando préstamos…</p>
-            ) : filteredLoans.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">No tienes recursos en uso.</p>
-            ) : (
-              <div>
-                <div className="grid grid-cols-[1fr_110px_150px_96px] border-b border-black/[0.04] dark:border-white/[0.04]">
-                  {[
-                    { icon: <Package className="h-3 w-3" />, label: 'Recurso' },
-                    { icon: <Calendar className="h-3 w-3" />, label: 'Vence' },
-                    { icon: <MapPin className="h-3 w-3" />, label: 'Devolución' },
-                    { icon: <Tag className="h-3 w-3" />, label: 'Estado' },
-                  ].map((col) => (
-                    <div key={col.label} className="flex items-center gap-1 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-400 dark:text-[#555]">
-                      {col.icon}{col.label}
-                    </div>
-                  ))}
-                </div>
-                {filteredLoans.map((loan) => {
-                  const isOverdue = loan.status === 'overdue';
-                  const dueToday = loan.due_date === new Date().toISOString().split('T')[0];
-                  const s = isOverdue
-                    ? { dot: 'bg-red-500', label: 'Vencido', tx: 'text-red-600 dark:text-red-400' }
-                    : dueToday
-                    ? { dot: 'bg-amber-400', label: 'Vence hoy', tx: 'text-amber-700 dark:text-amber-400' }
-                    : { dot: 'bg-blue-500', label: 'En uso', tx: 'text-blue-700 dark:text-blue-400' };
-                  return (
+        {/* ── Recursos en uso ── */}
+        {(activeTab === 'all' || activeTab === 'loans') && (
+          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleSection('loans')}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+            >
+              {collapsedSections.loans
+                ? <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                : <ChevronDown className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />}
+              <span className="h-2 w-2 rounded-full bg-amber-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">Recursos en uso</span>
+              <span className="text-xs text-gray-400 dark:text-[#555]">{filteredLoans.length}</span>
+              <span className="ml-auto" />
+            </button>
+
+            {!collapsedSections.loans && (
+              <>
+                {colHeader(['RECURSO', 'ESTADO', 'VENCE', 'DEVOLUCIÓN'], 'grid-cols-[1fr_140px_120px_120px]')}
+                {loading ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
+                ) : filteredLoans.length === 0 ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Sin registros</p>
+                ) : (
+                  filteredLoans.map((loan) => {
+                    const isOverdue = loan.status === 'overdue';
+                    const dueToday = loan.due_date === new Date().toISOString().split('T')[0];
+                    return (
+                      <button
+                        key={loan.id}
+                        type="button"
+                        onClick={() => router.push('/solicitudes')}
+                        className="w-full grid grid-cols-[1fr_140px_120px_120px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
+                      >
+                        <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
+                          <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">
+                            {loan.resource_units?.resources?.name ?? 'Recurso'}
+                          </p>
+                          {loan.resource_units?.serial_number && (
+                            <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 truncate">
+                              {loan.resource_units.serial_number}
+                            </p>
+                          )}
+                        </div>
+                        <div className="px-4 py-2.5">
+                          {isOverdue && (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-red-500 dark:text-red-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />Vencido
+                            </span>
+                          )}
+                          {dueToday && !isOverdue && (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />Vence hoy
+                            </span>
+                          )}
+                          {loan.status === 'active' && !dueToday && !isOverdue && (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />En uso
+                            </span>
+                          )}
+                        </div>
+                        <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                          {loan.due_date
+                            ? new Date(loan.due_date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })
+                            : '—'}
+                        </div>
+                        <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774] truncate">
+                          {loan.resource_units?.resources?.locations?.name ?? '—'}
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Retiros consumibles ── */}
+        {(activeTab === 'all' || activeTab === 'consumables') && (
+          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleSection('consumables')}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+            >
+              {collapsedSections.consumables
+                ? <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                : <ChevronDown className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />}
+              <span className="h-2 w-2 rounded-full bg-violet-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">Retiros consumibles</span>
+              <span className="text-xs text-gray-400 dark:text-[#555]">{filteredConsumables.length}</span>
+              <span className="ml-auto" />
+            </button>
+
+            {!collapsedSections.consumables && (
+              <>
+                {colHeader(['CONSUMIBLE', 'UBICACIÓN', 'CANT.', 'FECHA'], 'grid-cols-[1fr_160px_72px_110px]')}
+                {loading ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
+                ) : filteredConsumables.length === 0 ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Sin registros</p>
+                ) : (
+                  filteredConsumables.map((entry) => (
                     <button
-                      key={loan.id}
+                      key={entry.id}
                       type="button"
-                      onClick={() => router.push('/solicitudes')}
-                      className="grid w-full cursor-pointer grid-cols-[1fr_110px_150px_96px] items-center border-b border-black/[0.03] text-left transition-colors last:border-0 hover:bg-[#F7F7F6] dark:border-white/[0.03] dark:hover:bg-white/[0.025]"
+                      onClick={() => router.push(`/recursos/${entry.entity_id}`)}
+                      className="w-full grid grid-cols-[1fr_160px_72px_110px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
                     >
-                      <div className="min-w-0 px-4 py-2.5">
-                        <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{loan.resource_units?.resources?.name ?? 'Recurso'}</p>
+                      <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
+                        <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">
+                          {entry.details?.resource_name ?? 'Consumible'}
+                        </p>
+                        {entry.details?.notes && (
+                          <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 truncate">{entry.details.notes}</p>
+                        )}
+                      </div>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774] truncate">
+                        {entry.details?.use_location ?? '—'}
+                      </div>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                        {entry.details?.quantity ?? 0}
+                      </div>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                        {new Date(entry.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                      </div>
+                    </button>
+                  ))
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Mis recursos asignados ── */}
+        {(activeTab === 'all' || activeTab === 'assigned') && (
+          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleSection('assigned')}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+            >
+              {collapsedSections.assigned
+                ? <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                : <ChevronDown className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />}
+              <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">Mis recursos asignados</span>
+              <span className="text-xs text-gray-400 dark:text-[#555]">{filteredAssignedResources.length}</span>
+              <span className="ml-auto" />
+            </button>
+
+            {!collapsedSections.assigned && (
+              <>
+                {colHeader(['RECURSO', 'SKU', 'UBICACIÓN', 'TIPO', 'ACCIÓN'], 'grid-cols-[1fr_110px_160px_80px_84px]')}
+                {loading ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
+                ) : filteredAssignedResources.length === 0 ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Sin registros</p>
+                ) : (
+                  filteredAssignedResources.map((resource) => (
+                    <div
+                      key={resource.id}
+                      className="w-full grid grid-cols-[1fr_110px_160px_80px_84px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/recursos/${resource.id}`)}
+                        className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0 text-left"
+                      >
+                        <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">{resource.name}</p>
+                        {resource.owner_name && (
+                          <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 truncate">{resource.owner_name}</p>
+                        )}
+                      </button>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                        {resource.sku ?? '—'}
+                      </div>
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774] truncate">
+                        {resource.locations?.name ?? '—'}
+                      </div>
+                      <div className="px-4 py-2.5">
+                        <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                          {getCatalogVisibility(resource) === 'internal' ? 'Fijo' : 'Área'}
+                        </span>
+                      </div>
+                      <div className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => openLendModal(resource)}
+                          className="flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 font-medium hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors"
+                        >
+                          <Send className="h-3 w-3" /> Prestar
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Préstamos dados ── */}
+        {(activeTab === 'all' || activeTab === 'lending') && (
+          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleSection('lending')}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+            >
+              {collapsedSections.lending
+                ? <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                : <ChevronDown className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />}
+              <span className="h-2 w-2 rounded-full bg-indigo-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">Préstamos dados</span>
+              <span className="text-xs text-gray-400 dark:text-[#555]">{filteredPersonalLoans.length}</span>
+              <span className="ml-auto" />
+            </button>
+
+            {!collapsedSections.lending && (
+              <>
+                {colHeader(['RECURSO', 'PRESTADO A', 'VENCE', 'ACCIÓN'], 'grid-cols-[1fr_160px_120px_96px]')}
+                {loadingPersonal ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
+                ) : filteredPersonalLoans.length === 0 ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Sin registros</p>
+                ) : (
+                  filteredPersonalLoans.map((loan) => (
+                    <div
+                      key={loan.id}
+                      className="w-full grid grid-cols-[1fr_160px_120px_96px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+                    >
+                      <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
+                        <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">
+                          {loan.resource_units?.resources?.name ?? 'Recurso'}
+                        </p>
                         {loan.resource_units?.serial_number && (
-                          <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-gray-400 dark:text-[#555]">
-                            <Hash className="h-2.5 w-2.5 shrink-0" />{loan.resource_units.serial_number}
+                          <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 truncate">
+                            {loan.resource_units.serial_number}
                           </p>
                         )}
                       </div>
-                      <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
-                        {new Date(loan.due_date).toLocaleDateString('es-ES')}
-                      </p>
-                      <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
-                        {loan.resource_units?.resources?.locations?.name ?? '—'}
-                      </p>
-                      <div className="px-4 py-2.5">
-                        <span className={cn('inline-flex items-center gap-1.5 text-xs', s.tx)}>
-                          <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', s.dot)} />
-                          {s.label}
+                      <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774] truncate">
+                        <span className="flex items-center gap-1">
+                          <Users2 className="h-3 w-3 shrink-0" />
+                          {loan.profiles?.full_name || loan.profiles?.email || '—'}
                         </span>
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )
-          )}
-
-          {/* ── Retiros consumibles ── */}
-          {renderListShell(
-            'consumables',
-            'Retiros consumibles',
-            filteredConsumables.length,
-            <ShoppingBag className="h-4 w-4" />,
-            loading ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Cargando retiros…</p>
-            ) : filteredConsumables.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Aún no has retirado consumibles.</p>
-            ) : (
-              <div>
-                <div className="grid grid-cols-[1fr_160px_72px_110px] border-b border-black/[0.04] dark:border-white/[0.04]">
-                  {[
-                    { icon: <ShoppingBag className="h-3 w-3" />, label: 'Consumible' },
-                    { icon: <MapPin className="h-3 w-3" />, label: 'Ubicación' },
-                    { icon: <Hash className="h-3 w-3" />, label: 'Cant.' },
-                    { icon: <Calendar className="h-3 w-3" />, label: 'Fecha' },
-                  ].map((col) => (
-                    <div key={col.label} className="flex items-center gap-1 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-400 dark:text-[#555]">
-                      {col.icon}{col.label}
-                    </div>
-                  ))}
-                </div>
-                {filteredConsumables.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onClick={() => router.push(`/recursos/${entry.entity_id}`)}
-                    className="grid w-full cursor-pointer grid-cols-[1fr_160px_72px_110px] items-center border-b border-black/[0.03] text-left transition-colors last:border-0 hover:bg-[#F7F7F6] dark:border-white/[0.03] dark:hover:bg-white/[0.025]"
-                  >
-                    <div className="min-w-0 px-4 py-2.5">
-                      <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{entry.details?.resource_name ?? 'Consumible'}</p>
-                      {entry.details?.notes && (
-                        <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-[#555]">{entry.details.notes}</p>
-                      )}
-                    </div>
-                    <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
-                      {entry.details?.use_location ?? '—'}
-                    </p>
-                    <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
-                      {entry.details?.quantity ?? 0}
-                    </p>
-                    <div className="px-4 py-2.5">
-                      <span className="inline-flex items-center gap-1.5 text-xs text-violet-700 dark:text-violet-400">
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
-                        {new Date(entry.created_at).toLocaleDateString('es-ES')}
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )
-          )}
-
-          {/* ── Recursos asignados ── */}
-          {renderListShell(
-            'assigned',
-            'Mis recursos asignados',
-            filteredAssignedResources.length,
-            <ShieldCheck className="h-4 w-4" />,
-            loading ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Cargando asignaciones…</p>
-            ) : filteredAssignedResources.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">No tienes recursos fijos asignados.</p>
-            ) : (
-              <div>
-                <div className="grid grid-cols-[1fr_110px_160px_84px] border-b border-black/[0.04] dark:border-white/[0.04]">
-                  {[
-                    { icon: <Package className="h-3 w-3" />, label: 'Asignación' },
-                    { icon: <Hash className="h-3 w-3" />, label: 'SKU' },
-                    { icon: <MapPin className="h-3 w-3" />, label: 'Ubicación' },
-                    { icon: <Tag className="h-3 w-3" />, label: 'Tipo' },
-                  ].map((col) => (
-                    <div key={col.label} className="flex items-center gap-1 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-400 dark:text-[#555]">
-                      {col.icon}{col.label}
-                    </div>
-                  ))}
-                </div>
-                {filteredAssignedResources.map((resource) => (
-                  <button
-                    key={resource.id}
-                    type="button"
-                    onClick={() => router.push(`/recursos/${resource.id}`)}
-                    className="grid w-full cursor-pointer grid-cols-[1fr_110px_160px_84px] items-center border-b border-black/[0.03] text-left transition-colors last:border-0 hover:bg-[#F7F7F6] dark:border-white/[0.03] dark:hover:bg-white/[0.025]"
-                  >
-                    <div className="min-w-0 px-4 py-2.5">
-                      <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{resource.name}</p>
-                    </div>
-                    <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">{resource.sku ?? '—'}</p>
-                    <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
-                      {resource.locations?.name ?? '—'}
-                    </p>
-                    <div className="px-4 py-2.5">
-                      <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                        {getCatalogVisibility(resource) === 'internal' ? 'Fijo' : 'Área'}
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )
-          )}
-
-          {/* ── Préstamos dados ── */}
-          {renderListShell(
-            'lending',
-            'Préstamos dados',
-            personalLoans.length,
-            <Send className="h-4 w-4" />,
-            loadingPersonal ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">Cargando…</p>
-            ) : personalLoans.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400 dark:text-[#555]">No hay préstamos dados activos.</p>
-            ) : (
-              <div>
-                <div className="grid grid-cols-[1fr_140px_110px_96px] border-b border-black/[0.04] dark:border-white/[0.04]">
-                  {[
-                    { icon: <Package className="h-3 w-3" />, label: 'Recurso' },
-                    { icon: <Users2 className="h-3 w-3" />, label: 'Prestado a' },
-                    { icon: <Calendar className="h-3 w-3" />, label: 'Vence' },
-                    { icon: <Tag className="h-3 w-3" />, label: 'Acción' },
-                  ].map((col) => (
-                    <div key={col.label} className="flex items-center gap-1 px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-400 dark:text-[#555]">
-                      {col.icon}{col.label}
-                    </div>
-                  ))}
-                </div>
-                {personalLoans.map((loan) => {
-                  const isOverdue = loan.due_date < new Date().toISOString().split('T')[0];
-                  return (
-                    <div key={loan.id} className="grid grid-cols-[1fr_140px_110px_96px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-[#F7F7F6] dark:hover:bg-white/[0.025]">
-                      <div className="min-w-0 px-4 py-2.5">
-                        <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{loan.resource_units?.resources?.name ?? 'Recurso'}</p>
-                        {loan.resource_units?.serial_number && <p className="mt-0.5 text-xs text-gray-400 dark:text-[#555]">{loan.resource_units.serial_number}</p>}
-                      </div>
-                      <p className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774] truncate">{loan.profiles?.full_name || loan.profiles?.email || '—'}</p>
-                      <p className={cn('px-4 py-2.5 text-xs', isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-[#787774]')}>
-                        {new Date(loan.due_date).toLocaleDateString('es-ES')}
-                      </p>
                       <div className="px-4 py-2.5">
+                        {loan.due_date && (() => {
+                          const d = daysRemaining(loan.due_date);
+                          return (
+                            <span className={cn('text-xs font-medium', d.color)}>
+                              {d.label}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      <div className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => handleReturnPersonalLoan(loan.id)}
@@ -930,13 +743,13 @@ export function MyResources() {
                         </button>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            )
-          )}
-        </div>
-      )}
+                  ))
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Personal loan modal */}
       {lendModal.open && (
