@@ -227,7 +227,7 @@ export function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () =>
             />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-gray-900 dark:text-[#E8E8E6] truncate leading-tight">
-                {profile?.full_name || user?.user_metadata?.full_name || 'Usuario'}
+                {profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Usuario'}
               </p>
               <p className="text-[10px] text-gray-400 dark:text-[#555] truncate">{user?.email}</p>
             </div>

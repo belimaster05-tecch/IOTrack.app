@@ -18,6 +18,10 @@ import {
   Layers,
   ChevronDown,
   Info,
+  Tag,
+  Hash,
+  Activity,
+  Zap,
 } from 'lucide-react';
 import { getCategoryIconComponent } from '@/lib/categoryIcons';
 import { Button } from '@/components/ui/Button';
@@ -527,8 +531,26 @@ export function Resources() {
           })}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white dark:bg-[#1C1C1C] dark:border-[#2A2A2A]">
-          {filteredResources.map((resource, idx) => {
+        <div className="rounded-xl bg-white dark:bg-[#1C1C1C] overflow-hidden">
+          {/* Column headers */}
+          <div className="grid grid-cols-[2fr_160px_180px_120px_140px_100px] border-b border-black/[0.05] dark:border-white/[0.04] py-2">
+            {(
+              [
+                { label: 'RECURSO', icon: Package },
+                { label: 'CATEGORÍA', icon: Tag },
+                { label: 'UBICACIÓN', icon: MapPin },
+                { label: 'DISPONIBILIDAD', icon: Hash },
+                { label: 'ESTADO', icon: Activity },
+                { label: 'ACCIÓN', icon: Zap },
+              ] as const
+            ).map(({ label, icon: HIcon }) => (
+              <span key={label} className="inline-flex items-center gap-1.5 px-4 text-[10px] font-semibold tracking-widest text-gray-400 dark:text-[#555] uppercase">
+                <HIcon className="h-3 w-3 shrink-0" />{label}
+              </span>
+            ))}
+          </div>
+
+          {filteredResources.map((resource) => {
             const Icon = getCategoryIconComponent(resource.categories?.icon_name);
             const visibility = getCatalogVisibility(resource);
             const isAssigned = visibility === 'restricted';
@@ -544,68 +566,62 @@ export function Resources() {
               <div
                 key={resource.id}
                 onClick={() => router.push(`/recursos/${resource.id}`)}
-                className={cn(
-                  'group flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-gray-50 dark:hover:bg-[#242424]',
-                  idx > 0 && 'border-t border-gray-50 dark:border-[#242424]'
-                )}
+                className="group grid grid-cols-[2fr_160px_180px_120px_140px_100px] items-center cursor-pointer border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
               >
-                {/* Thumbnail */}
-                <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gray-100 dark:bg-[#252525] flex items-center justify-center">
-                  {resource.image_url ? (
-                    <img
-                      src={resource.image_url}
-                      alt={resource.name}
-                      className="h-full w-full object-cover"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                    />
+                {/* RECURSO */}
+                <div className="flex items-center gap-3 px-4 py-2.5 min-w-0 border-r border-black/[0.03] dark:border-white/[0.03]">
+                  <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg bg-gray-100 dark:bg-[#252525] flex items-center justify-center">
+                    {resource.image_url ? (
+                      <img
+                        src={resource.image_url}
+                        alt={resource.name}
+                        className="h-full w-full object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    ) : (
+                      <Icon className="h-4 w-4 text-gray-300 dark:text-[#444]" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-gray-900 dark:text-[#E8E8E6]">{resource.name}</p>
+                    {condTags.length > 0 && (
+                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                        {condTags.map((rct: any) => {
+                          const tag = rct.condition_tags;
+                          const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
+                          return (
+                            <span key={tag.id} className={cn('inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium', c.bg, c.text)}>
+                              <span className={cn('h-1 w-1 rounded-full shrink-0', c.dot)} />
+                              {tag.name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* CATEGORÍA */}
+                <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03]">
+                  <span className="text-xs text-gray-500 dark:text-[#787774] truncate">{resource.categories?.name || 'General'}</span>
+                </div>
+
+                {/* UBICACIÓN */}
+                <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03]">
+                  {resource.locations?.name ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-[#787774] truncate">
+                      <MapPin className="h-3 w-3 shrink-0" />{resource.locations.name}
+                    </span>
                   ) : (
-                    <Icon className="h-5 w-5 text-gray-300 dark:text-[#444]" />
+                    <span className="text-xs text-gray-300 dark:text-[#444]">—</span>
                   )}
                 </div>
 
-                {/* Main info */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="truncate text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">{resource.name}</h3>
-                    {isInternal && (
-                      <span className="shrink-0 inline-flex items-center gap-0.5 rounded-md bg-gray-900 px-1.5 py-0.5 text-[10px] font-medium text-white dark:bg-[#111]">
-                        <Shield className="h-2.5 w-2.5" />Admin
-                      </span>
-                    )}
-                    {isAssigned && (
-                      <span className="shrink-0 inline-flex items-center gap-0.5 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-[#1E2A40] dark:text-[#A7C0FF]">
-                        <UserRound className="h-2.5 w-2.5" />Asignado
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] text-gray-400 dark:text-[#555]">{resource.categories?.name || 'General'}</span>
-                    {resource.locations?.name && (
-                      <>
-                        <span className="text-gray-200 dark:text-[#333]">·</span>
-                        <span className="inline-flex items-center gap-0.5 text-[11px] text-gray-400 dark:text-[#555]">
-                          <MapPin className="h-2.5 w-2.5" />{resource.locations.name}
-                        </span>
-                      </>
-                    )}
-                    {condTags.map((rct: any) => {
-                      const tag = rct.condition_tags;
-                      const c = TAG_COLORS[tag.color] || TAG_COLORS.gray;
-                      return (
-                        <span key={tag.id} className={cn('inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium', c.bg, c.text)}>
-                          <span className={cn('h-1 w-1 rounded-full shrink-0', c.dot)} />
-                          {tag.name}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Availability — hidden on mobile */}
-                <div className="hidden sm:block w-20 shrink-0 text-right">
+                {/* DISPONIBILIDAD */}
+                <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03]">
                   {isAssigned || isInternal || isFixedOrService ? (
-                    <span className="text-[11px] text-gray-400 dark:text-[#555]">
+                    <span className="text-xs text-gray-400 dark:text-[#555]">
                       {resource.owner_name || (isFixedOrService ? 'Fijo' : '—')}
                     </span>
                   ) : (
@@ -613,26 +629,53 @@ export function Resources() {
                   )}
                 </div>
 
-                {/* CTA */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    router.push(isAssigned || isInternal || isFixedOrService ? `/recursos/${resource.id}` : `/solicitar?resource=${resource.id}`);
-                  }}
-                  className={cn(
-                    'shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer',
-                    isAssigned || isInternal || isFixedOrService
-                      ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-[#2A2A2A] dark:text-[#AAAAAA] dark:hover:bg-[#333]'
-                      : 'bg-gray-900 text-white hover:bg-black dark:bg-[#E8E8E6] dark:text-[#111] dark:hover:bg-white'
+                {/* ESTADO */}
+                <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03]">
+                  {isInternal ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-gray-500 dark:text-[#787774]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400 shrink-0" />Admin
+                    </span>
+                  ) : isAssigned ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 dark:text-[#A7C0FF]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />Asignado
+                    </span>
+                  ) : isFixedOrService ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-gray-500 dark:text-[#787774]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400 shrink-0" />Fijo
+                    </span>
+                  ) : avail > 0 ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />Disponible
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-rose-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-rose-400 shrink-0" />Sin stock
+                    </span>
                   )}
-                >
-                  {isAssigned || isInternal || isFixedOrService ? 'Ver' : 'Solicitar'}
-                </button>
+                </div>
+
+                {/* ACCIÓN */}
+                <div className="px-4 py-2.5">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(isAssigned || isInternal || isFixedOrService ? `/recursos/${resource.id}` : `/solicitar?resource=${resource.id}`);
+                    }}
+                    className={cn(
+                      'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap',
+                      isAssigned || isInternal || isFixedOrService
+                        ? 'bg-black/[0.05] text-gray-600 hover:bg-black/[0.08] dark:bg-white/[0.06] dark:text-[#AAAAAA] dark:hover:bg-white/[0.1]'
+                        : 'bg-gray-900 text-white hover:bg-black dark:bg-[#E8E8E6] dark:text-[#111] dark:hover:bg-white'
+                    )}
+                  >
+                    {isAssigned || isInternal || isFixedOrService ? 'Ver' : 'Solicitar'}
+                  </button>
+                </div>
               </div>
             );
           })}
 
-          <div className="border-t border-gray-50 dark:border-[#242424] px-4 py-2.5">
+          <div className="border-t border-black/[0.03] dark:border-white/[0.03] px-4 py-2.5">
             <span className="text-[11px] text-gray-400 dark:text-[#555]">{filteredResources.length} recurso(s)</span>
           </div>
         </div>

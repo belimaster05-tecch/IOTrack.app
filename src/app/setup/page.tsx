@@ -68,13 +68,12 @@ export default function SetupPage() {
       });
       if (updateError) throw updateError;
 
-      // Sync name to profiles table
+      // Sync name to profiles table (upsert in case the row doesn't exist yet for invited users)
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         await supabase
           .from('profiles')
-          .update({ full_name: fullName.trim() })
-          .eq('id', user.id);
+          .upsert({ id: user.id, full_name: fullName.trim() }, { onConflict: 'id' });
       }
 
       // Clear cache + full reload so middleware reads the refreshed session (updated has_password)

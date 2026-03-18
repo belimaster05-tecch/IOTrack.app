@@ -103,10 +103,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [membershipRole, setMembershipRole] = useState<MembershipRole | null>(null);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
+  // Tracks the last known-good profile so re-hydration can't null it out on transient failures
+  const validProfileRef = useRef<Profile | null>(null);
 
   const resetUserState = useCallback(() => {
     clearStoreCache();
     clearAuthCache();
+    validProfileRef.current = null;
     setProfile(null);
     setMemberships([]);
     setActiveMembership(null);
@@ -116,6 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const applyState = useCallback((data: Omit<CachedAuth, 'uid' | 'ts'>) => {
+    if (data.profile) validProfileRef.current = data.profile;
     setProfile(data.profile);
     setMemberships(data.memberships);
     setActiveMembership(data.activeMembership);
@@ -195,8 +199,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           organizationLogoUrl: orgLogoUrl,
           membershipRole: (resolvedMembership?.role ?? fallbackRole) as MembershipRole | null,
         };
-        applyState(stateData);
-        if (profileRow) writeAuthCache(currentUser.id, stateData);
+        // Guard: never wipe a valid profile with null on a transient DB failure
+        if (stateData.profile || !validProfileRef.current) {
+          applyState(stateData);
+          if (profileRow) writeAuthCache(currentUser.id, stateData);
+        }
         return;
       }
 
@@ -224,8 +231,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         organizationLogoUrl: ctx.org_logo_url ?? null,
         membershipRole: ((membership?.role ?? fallbackRole) as MembershipRole | null),
       };
-      applyState(stateData);
-      if (profileRow) writeAuthCache(currentUser.id, stateData);
+      // Guard: never wipe a valid profile with null on a transient RPC failure
+      if (stateData.profile || !validProfileRef.current) {
+        applyState(stateData);
+        if (profileRow) writeAuthCache(currentUser.id, stateData);
+      }
     } catch {
       if (!mountedRef.current) return;
       // Don't reset state on transient errors — show stale data rather than blank

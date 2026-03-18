@@ -4,11 +4,13 @@ import { useRouter } from 'next/navigation';
 import {
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   Filter,
   RotateCcw,
   Search,
   Send,
   Users2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/Button';
@@ -37,7 +39,7 @@ export function MyResources() {
   const { resources, loading: loadingResources } = useResources();
   const { users: orgUsers } = useUsers(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'requests' | 'loans' | 'consumables' | 'assigned' | 'lending'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'requests' | 'loans' | 'consumables' | 'assigned' | 'lending' | 'usage'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'active' | 'overdue'>('all');
   const [filterOpen, setFilterOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
@@ -46,6 +48,7 @@ export function MyResources() {
     consumables: false,
     assigned: false,
     lending: false,
+    usage: false,
   });
   const [consumableActivity, setConsumableActivity] = useState<any[]>([]);
   const [loadingConsumables, setLoadingConsumables] = useState(true);
@@ -60,6 +63,21 @@ export function MyResources() {
   const [lendDueDate, setLendDueDate] = useState('');
   const [lendNotes, setLendNotes] = useState('');
   const [lendSubmitting, setLendSubmitting] = useState(false);
+
+  // Usage log modal
+  const [usageModal, setUsageModal] = useState(false);
+  const [usageSearch, setUsageSearch] = useState('');
+  const [usageResourceId, setUsageResourceId] = useState('');
+  const [usageResourceName, setUsageResourceName] = useState('');
+  const [usageUnits, setUsageUnits] = useState<any[]>([]);
+  const [usageUnitId, setUsageUnitId] = useState('');
+  const [usageStartDate, setUsageStartDate] = useState('');
+  const [usageDueDate, setUsageDueDate] = useState('');
+  const [usageQuantity, setUsageQuantity] = useState('1');
+  const [usageNotes, setUsageNotes] = useState('');
+  const [usageSubmitting, setUsageSubmitting] = useState(false);
+  const [quickLogs, setQuickLogs] = useState<any[]>([]);
+  const [loadingQuickLogs, setLoadingQuickLogs] = useState(true);
 
   const filterRef = useRef<HTMLDivElement>(null);
 
@@ -96,6 +114,28 @@ export function MyResources() {
     };
 
     fetchConsumableActivity();
+  }, [user?.id]);
+
+  const refreshQuickLogs = async () => {
+    if (!user?.id) return;
+    const { data } = await supabase
+      .from('loans')
+      .select('*, resource_units(id, serial_number, resources(name, sku)), resources(id, name, sku)')
+      .eq('user_id', user.id)
+      .eq('source', 'quick_log')
+      .neq('status', 'returned')
+      .order('created_at', { ascending: false });
+    setQuickLogs(data ?? []);
+  };
+
+  useEffect(() => {
+    const fetchQuickLogs = async () => {
+      if (!user?.id) { setLoadingQuickLogs(false); return; }
+      setLoadingQuickLogs(true);
+      try { await refreshQuickLogs(); } finally { setLoadingQuickLogs(false); }
+    };
+    fetchQuickLogs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   const refreshPersonalLoans = async () => {
@@ -147,10 +187,13 @@ export function MyResources() {
     if (!lendModal.resource || !lendBorrowerId || !lendDueDate || !user?.id) return;
     setLendSubmitting(true);
     try {
+      const unitId = lendUnitId || null;
       const { error } = await supabase.from('loans').insert({
-        unit_id: lendUnitId || null,
+        resource_id: lendModal.resource?.id ?? null,
+        unit_id: unitId,
         user_id: lendBorrowerId,
         lender_user_id: user.id,
+        source: 'personal',
         start_date: new Date().toISOString().split('T')[0],
         due_date: lendDueDate,
         status: 'active',
@@ -174,6 +217,78 @@ export function MyResources() {
       if (error) throw error;
       toast.success('Préstamo marcado como devuelto');
       await refreshPersonalLoans();
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    }
+  };
+
+  const fetchUsageUnits = async (resourceId: string) => {
+    const { data } = await supabase
+      .from('resource_units')
+      .select('id, serial_number')
+      .eq('resource_id', resourceId)
+      .eq('status', 'available');
+    setUsageUnits(data ?? []);
+    if (data?.length === 1) setUsageUnitId(data[0].id);
+    else setUsageUnitId('');
+  };
+
+  const openUsageModal = (resourceId?: string, resourceName?: string) => {
+    setUsageModal(true);
+    setUsageSearch('');
+    setUsageResourceId(resourceId ?? '');
+    setUsageResourceName(resourceName ?? '');
+    setUsageUnits([]);
+    setUsageUnitId('');
+    setUsageQuantity('1');
+    setUsageStartDate(new Date().toISOString().split('T')[0]);
+    setUsageDueDate('');
+    setUsageNotes('');
+    if (resourceId) fetchUsageUnits(resourceId);
+  };
+
+  const handleSelectUsageResource = async (resource: any) => {
+    setUsageResourceId(resource.id);
+    setUsageResourceName(resource.name);
+    setUsageSearch('');
+    await fetchUsageUnits(resource.id);
+  };
+
+  const handleSubmitUsage = async () => {
+    if (!usageResourceId || !usageStartDate || !user?.id) return;
+    setUsageSubmitting(true);
+    try {
+      const qty = parseInt(usageQuantity) || 1;
+      const { error } = await supabase.from('loans').insert({
+        resource_id: usageResourceId,
+        unit_id: usageUnitId || null,
+        user_id: user.id,
+        source: 'quick_log',
+        start_date: usageStartDate,
+        due_date: usageDueDate || null,
+        status: 'active',
+        notes: [usageNotes, qty > 1 ? `Cantidad: ${qty}` : ''].filter(Boolean).join(' · ') || null,
+        organization_id: profile?.organization_id,
+      });
+      if (error) throw error;
+      toast.success('Uso registrado correctamente');
+      setUsageModal(false);
+      await refreshQuickLogs();
+    } catch (err: any) {
+      toast.error('Error al registrar: ' + err.message);
+    } finally {
+      setUsageSubmitting(false);
+    }
+  };
+
+  const handleReturnQuickLog = async (loanId: string) => {
+    try {
+      const { error } = await supabase.from('loans')
+        .update({ status: 'returned', return_date: new Date().toISOString().split('T')[0] })
+        .eq('id', loanId);
+      if (error) throw error;
+      toast.success('Uso finalizado');
+      await refreshQuickLogs();
     } catch (err: any) {
       toast.error('Error: ' + err.message);
     }
@@ -256,14 +371,30 @@ export function MyResources() {
     );
   }, [personalLoans, searchQuery]);
 
-  const loading = loadingRequests || loadingLoans || loadingConsumables || loadingResources || loadingPersonal;
+  const filteredQuickLogs = useMemo(() => {
+    let items = quickLogs;
+    if (statusFilter === 'active') items = items.filter((l) => l.status === 'active');
+    else if (statusFilter === 'overdue') items = items.filter((l) => l.status === 'overdue');
+    else if (!['all', 'active', 'overdue'].includes(statusFilter)) return [];
+    if (!searchQuery.trim()) return items;
+    const q = searchQuery.toLowerCase();
+    return items.filter(
+      (l) =>
+        l.resources?.name?.toLowerCase().includes(q) ||
+        l.resource_units?.resources?.name?.toLowerCase().includes(q) ||
+        l.notes?.toLowerCase().includes(q)
+    );
+  }, [quickLogs, searchQuery, statusFilter]);
+
+  const loading = loadingRequests || loadingLoans || loadingConsumables || loadingResources || loadingPersonal || loadingQuickLogs;
 
   const totalCount =
     filteredRequests.length +
     filteredLoans.length +
     filteredConsumables.length +
     filteredAssignedResources.length +
-    filteredPersonalLoans.length;
+    filteredPersonalLoans.length +
+    filteredQuickLogs.length;
 
   const toggleSection = (section: string) => {
     setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
@@ -286,7 +417,7 @@ export function MyResources() {
   );
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-12">
+    <div className="mx-auto max-w-7xl space-y-6 pb-12">
       {/* Page header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -295,13 +426,23 @@ export function MyResources() {
             Revisa tus solicitudes, recursos activos y préstamos personales.
           </p>
         </div>
-        <Button
-          onClick={() => router.push('/solicitar')}
-          variant="primary"
-          className="bg-black text-white shrink-0"
-        >
-          + Solicitar recurso
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => openUsageModal()}
+            className="flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm text-gray-600 dark:text-[#AAAAAA] hover:bg-black/[0.04] dark:hover:bg-white/[0.05] transition-colors"
+          >
+            <ClipboardList className="h-4 w-4" />
+            Registrar uso
+          </button>
+          <Button
+            onClick={() => router.push('/solicitar')}
+            variant="primary"
+            className="bg-black text-white"
+          >
+            + Solicitar recurso
+          </Button>
+        </div>
       </div>
 
       {/* Tab bar */}
@@ -314,6 +455,7 @@ export function MyResources() {
             { key: 'consumables', label: 'Consumibles', count: filteredConsumables.length },
             { key: 'assigned', label: 'Asignados', count: filteredAssignedResources.length },
             { key: 'lending', label: 'Préstamos dados', count: filteredPersonalLoans.length },
+            { key: 'usage', label: 'Uso directo', count: filteredQuickLogs.length },
           ] as const
         ).map((tab) => (
           <button
@@ -405,7 +547,7 @@ export function MyResources() {
 
         {/* ── Mis solicitudes ── */}
         {(activeTab === 'all' || activeTab === 'requests') && (
-          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+          <div className="rounded-xl bg-white dark:bg-[#1D1D1D] overflow-hidden">
             <button
               type="button"
               onClick={() => toggleSection('requests')}
@@ -422,7 +564,7 @@ export function MyResources() {
 
             {!collapsedSections.requests && (
               <>
-                {colHeader(['RECURSO', 'ESTADO', 'FECHA', 'HORARIO'], 'grid-cols-[1fr_140px_120px_100px]')}
+                {colHeader(['RECURSO', 'ESTADO', 'FECHA', 'HORARIO'], 'grid-cols-[1fr_160px_140px_140px]')}
                 {loading ? (
                   <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
                 ) : filteredRequests.length === 0 ? (
@@ -433,7 +575,7 @@ export function MyResources() {
                       key={req.id}
                       type="button"
                       onClick={() => router.push('/solicitudes')}
-                      className="w-full grid grid-cols-[1fr_140px_120px_100px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
+                      className="w-full grid grid-cols-[1fr_160px_140px_140px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
                     >
                       <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
                         <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">{req.resources?.name ?? 'Recurso'}</p>
@@ -474,7 +616,7 @@ export function MyResources() {
 
         {/* ── Recursos en uso ── */}
         {(activeTab === 'all' || activeTab === 'loans') && (
-          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+          <div className="rounded-xl bg-white dark:bg-[#1D1D1D] overflow-hidden">
             <button
               type="button"
               onClick={() => toggleSection('loans')}
@@ -491,7 +633,7 @@ export function MyResources() {
 
             {!collapsedSections.loans && (
               <>
-                {colHeader(['RECURSO', 'ESTADO', 'VENCE', 'DEVOLUCIÓN'], 'grid-cols-[1fr_140px_120px_120px]')}
+                {colHeader(['RECURSO', 'ESTADO', 'VENCE', 'DEVOLUCIÓN'], 'grid-cols-[1fr_160px_160px_180px]')}
                 {loading ? (
                   <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
                 ) : filteredLoans.length === 0 ? (
@@ -505,7 +647,7 @@ export function MyResources() {
                         key={loan.id}
                         type="button"
                         onClick={() => router.push('/solicitudes')}
-                        className="w-full grid grid-cols-[1fr_140px_120px_120px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
+                        className="w-full grid grid-cols-[1fr_160px_160px_180px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
                       >
                         <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
                           <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">
@@ -553,7 +695,7 @@ export function MyResources() {
 
         {/* ── Retiros consumibles ── */}
         {(activeTab === 'all' || activeTab === 'consumables') && (
-          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+          <div className="rounded-xl bg-white dark:bg-[#1D1D1D] overflow-hidden">
             <button
               type="button"
               onClick={() => toggleSection('consumables')}
@@ -570,7 +712,7 @@ export function MyResources() {
 
             {!collapsedSections.consumables && (
               <>
-                {colHeader(['CONSUMIBLE', 'UBICACIÓN', 'CANT.', 'FECHA'], 'grid-cols-[1fr_160px_72px_110px]')}
+                {colHeader(['CONSUMIBLE', 'UBICACIÓN', 'CANT.', 'FECHA'], 'grid-cols-[1fr_220px_80px_140px]')}
                 {loading ? (
                   <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
                 ) : filteredConsumables.length === 0 ? (
@@ -581,7 +723,7 @@ export function MyResources() {
                       key={entry.id}
                       type="button"
                       onClick={() => router.push(`/recursos/${entry.entity_id}`)}
-                      className="w-full grid grid-cols-[1fr_160px_72px_110px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
+                      className="w-full grid grid-cols-[1fr_220px_80px_140px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors text-left"
                     >
                       <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
                         <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">
@@ -610,7 +752,7 @@ export function MyResources() {
 
         {/* ── Mis recursos asignados ── */}
         {(activeTab === 'all' || activeTab === 'assigned') && (
-          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+          <div className="rounded-xl bg-white dark:bg-[#1D1D1D] overflow-hidden">
             <button
               type="button"
               onClick={() => toggleSection('assigned')}
@@ -627,7 +769,7 @@ export function MyResources() {
 
             {!collapsedSections.assigned && (
               <>
-                {colHeader(['RECURSO', 'SKU', 'UBICACIÓN', 'TIPO', 'ACCIÓN'], 'grid-cols-[1fr_110px_160px_80px_84px]')}
+                {colHeader(['RECURSO', 'SKU', 'UBICACIÓN', 'TIPO', 'ACCIÓN'], 'grid-cols-[1fr_140px_200px_100px_100px]')}
                 {loading ? (
                   <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
                 ) : filteredAssignedResources.length === 0 ? (
@@ -636,7 +778,7 @@ export function MyResources() {
                   filteredAssignedResources.map((resource) => (
                     <div
                       key={resource.id}
-                      className="w-full grid grid-cols-[1fr_110px_160px_80px_84px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+                      className="w-full grid grid-cols-[1fr_140px_200px_100px_100px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
                     >
                       <button
                         type="button"
@@ -679,7 +821,7 @@ export function MyResources() {
 
         {/* ── Préstamos dados ── */}
         {(activeTab === 'all' || activeTab === 'lending') && (
-          <div className="bg-white dark:bg-[#1D1D1D] rounded-xl border border-black/[0.06] dark:border-white/[0.05] overflow-hidden">
+          <div className="rounded-xl bg-white dark:bg-[#1D1D1D] overflow-hidden">
             <button
               type="button"
               onClick={() => toggleSection('lending')}
@@ -696,7 +838,7 @@ export function MyResources() {
 
             {!collapsedSections.lending && (
               <>
-                {colHeader(['RECURSO', 'PRESTADO A', 'VENCE', 'ACCIÓN'], 'grid-cols-[1fr_160px_120px_96px]')}
+                {colHeader(['RECURSO', 'PRESTADO A', 'VENCE', 'ACCIÓN'], 'grid-cols-[1fr_220px_160px_120px]')}
                 {loadingPersonal ? (
                   <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
                 ) : filteredPersonalLoans.length === 0 ? (
@@ -705,7 +847,7 @@ export function MyResources() {
                   filteredPersonalLoans.map((loan) => (
                     <div
                       key={loan.id}
-                      className="w-full grid grid-cols-[1fr_160px_120px_96px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+                      className="w-full grid grid-cols-[1fr_220px_160px_120px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
                     >
                       <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
                         <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">
@@ -749,7 +891,288 @@ export function MyResources() {
             )}
           </div>
         )}
+
+        {/* ── Uso directo ── */}
+        {(activeTab === 'all' || activeTab === 'usage') && (
+          <div className="rounded-xl bg-white dark:bg-[#1D1D1D] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleSection('usage')}
+              className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-black/[0.015] dark:hover:bg-white/[0.02] transition-colors"
+            >
+              {collapsedSections.usage
+                ? <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                : <ChevronDown className="h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />}
+              <span className="h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-900 dark:text-[#E8E8E6]">Uso directo</span>
+              <span className="text-xs text-gray-400 dark:text-[#555]">{filteredQuickLogs.length}</span>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); openUsageModal(); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openUsageModal(); } }}
+                className="ml-auto text-[11px] text-orange-600 dark:text-orange-400 hover:text-orange-700 dark:hover:text-orange-300 font-medium transition-colors px-2 cursor-pointer"
+              >
+                + Registrar
+              </span>
+            </button>
+
+            {!collapsedSections.usage && (
+              <>
+                {colHeader(['RECURSO', 'TOMADO', 'DEVOLUCIÓN EST.', 'ESTADO', 'ACCIÓN'], 'grid-cols-[1fr_140px_160px_140px_120px]')}
+                {loadingQuickLogs ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">Cargando...</p>
+                ) : filteredQuickLogs.length === 0 ? (
+                  <p className="px-4 py-5 text-sm text-center text-gray-400 dark:text-[#555]">
+                    Sin registros ·{' '}
+                    <button
+                      type="button"
+                      onClick={() => openUsageModal()}
+                      className="text-orange-600 dark:text-orange-400 hover:underline font-medium"
+                    >
+                      Registrar uso
+                    </button>
+                  </p>
+                ) : (
+                  filteredQuickLogs.map((loan) => {
+                    const resourceName = loan.resource_units?.resources?.name ?? loan.resources?.name ?? 'Recurso';
+                    const serialNumber = loan.resource_units?.serial_number;
+                    const isOverdue = loan.due_date && new Date(loan.due_date) < new Date(new Date().toISOString().split('T')[0]);
+                    return (
+                      <div
+                        key={loan.id}
+                        className="w-full grid grid-cols-[1fr_140px_160px_140px_120px] items-center border-b border-black/[0.03] dark:border-white/[0.03] last:border-0"
+                      >
+                        <div className="px-4 py-2.5 border-r border-black/[0.03] dark:border-white/[0.03] min-w-0">
+                          <p className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">{resourceName}</p>
+                          {serialNumber && (
+                            <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 font-mono truncate">{serialNumber}</p>
+                          )}
+                          {loan.notes && (
+                            <p className="text-xs text-gray-400 dark:text-[#555] mt-0.5 truncate">{loan.notes}</p>
+                          )}
+                        </div>
+                        <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                          {new Date(loan.start_date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                        </div>
+                        <div className="px-4 py-2.5 text-xs text-gray-500 dark:text-[#787774]">
+                          {loan.due_date
+                            ? (() => {
+                                const d = daysRemaining(loan.due_date);
+                                return <span className={cn('font-medium', d.color)}>{d.label}</span>;
+                              })()
+                            : <span className="text-gray-300 dark:text-[#444]">Sin fecha</span>}
+                        </div>
+                        <div className="px-4 py-2.5">
+                          {isOverdue ? (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-red-500 dark:text-red-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />Vencido
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-orange-600 dark:text-orange-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-orange-400 shrink-0" />En uso
+                            </span>
+                          )}
+                        </div>
+                        <div className="px-4 py-2.5">
+                          <button
+                            type="button"
+                            onClick={() => handleReturnQuickLog(loan.id)}
+                            className="flex items-center gap-1 text-xs text-gray-500 dark:text-[#787774] hover:text-gray-900 dark:hover:text-[#E8E8E6] transition-colors"
+                          >
+                            <RotateCcw className="h-3 w-3" /> Finalizar
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Usage log modal */}
+      {usageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#242424] rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Registrar uso</h2>
+                <p className="text-sm text-gray-500 dark:text-[#787774] mt-1">
+                  Registra un recurso que ya tomaste o estás usando.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUsageModal(false)}
+                className="p-1 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-[#AAAAAA] transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Resource picker */}
+              <div>
+                <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Recurso *</label>
+                {usageResourceId ? (
+                  <div className="flex items-center justify-between h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-gray-50 dark:bg-[#1D1D1D]">
+                    <span className="text-sm text-gray-900 dark:text-[#E8E8E6] truncate">{usageResourceName}</span>
+                    <button
+                      type="button"
+                      onClick={() => { setUsageResourceId(''); setUsageResourceName(''); setUsageUnits([]); setUsageUnitId(''); }}
+                      className="text-gray-400 hover:text-gray-600 ml-2 shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 dark:text-[#555]" />
+                    <input
+                      type="text"
+                      placeholder="Buscar recurso..."
+                      value={usageSearch}
+                      onChange={(e) => setUsageSearch(e.target.value)}
+                      autoFocus
+                      className="w-full h-9 pl-8 pr-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                    />
+                    {usageSearch.trim().length > 0 && (
+                      <div className="absolute top-10 left-0 right-0 z-10 bg-white dark:bg-[#2A2A2A] border border-gray-200 dark:border-[#333] rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                        {resources
+                          .filter((r) =>
+                            r.behavior !== 'instalado' &&
+                            r.behavior !== 'servicio' &&
+                            r.status !== 'inactive' &&
+                            (r.name?.toLowerCase().includes(usageSearch.toLowerCase()) ||
+                             r.sku?.toLowerCase().includes(usageSearch.toLowerCase()))
+                          )
+                          .slice(0, 8)
+                          .map((r) => (
+                            <button
+                              key={r.id}
+                              type="button"
+                              onClick={() => handleSelectUsageResource(r)}
+                              className="w-full text-left px-3 py-2 hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-colors"
+                            >
+                              <p className="text-sm text-gray-900 dark:text-[#E8E8E6]">{r.name}</p>
+                              {r.sku && <p className="text-xs text-gray-400 dark:text-[#555]">{r.sku}</p>}
+                            </button>
+                          ))}
+                        {resources.filter((r) =>
+                          r.behavior !== 'instalado' &&
+                          r.behavior !== 'servicio' &&
+                          r.status !== 'inactive' &&
+                          (r.name?.toLowerCase().includes(usageSearch.toLowerCase()) ||
+                           r.sku?.toLowerCase().includes(usageSearch.toLowerCase()))
+                        ).length === 0 && (
+                          <p className="px-3 py-3 text-sm text-gray-400 dark:text-[#555] text-center">Sin resultados</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Unit picker */}
+              {usageResourceId && usageUnits.length > 1 && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Unidad (opcional)</label>
+                  <select
+                    value={usageUnitId}
+                    onChange={(e) => setUsageUnitId(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                  >
+                    <option value="">Sin especificar</option>
+                    {usageUnits.map((u) => (
+                      <option key={u.id} value={u.id}>{u.serial_number || `Unidad ${u.id.slice(0, 6)}`}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {usageResourceId && usageUnits.length === 1 && (
+                <p className="text-xs text-gray-500 dark:text-[#787774] bg-gray-50 dark:bg-[#1D1D1D] px-3 py-2 rounded-lg">
+                  Unidad: <span className="font-mono font-semibold">{usageUnits[0].serial_number || usageUnits[0].id.slice(0, 8)}</span>
+                </p>
+              )}
+
+              {/* Quantity — only shown when no specific unit is selected */}
+              {!usageUnitId && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Cantidad</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={usageQuantity}
+                    onChange={(e) => setUsageQuantity(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                  />
+                </div>
+              )}
+
+              {/* Date taken */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Fecha de toma *</label>
+                  <input
+                    type="date"
+                    value={usageStartDate}
+                    onChange={(e) => setUsageStartDate(e.target.value)}
+                    max={new Date().toISOString().split('T')[0]}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">
+                    Devolución est. <span className="text-gray-400 font-normal">(opcional)</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={usageDueDate}
+                    onChange={(e) => setUsageDueDate(e.target.value)}
+                    min={usageStartDate}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none focus:border-gray-400 dark:focus:border-[#555]"
+                  />
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">
+                  Notas <span className="text-gray-400 font-normal">(opcional)</span>
+                </label>
+                <textarea
+                  value={usageNotes}
+                  onChange={(e) => setUsageNotes(e.target.value)}
+                  placeholder="Motivo de uso, proyecto, ubicación..."
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none focus:border-gray-400 dark:focus:border-[#555] resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setUsageModal(false)}
+                className="flex-1 h-9 rounded-lg border border-gray-200 dark:border-[#333] text-sm text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-100 dark:hover:bg-[#2A2A2A] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitUsage}
+                disabled={!usageResourceId || !usageStartDate || usageSubmitting}
+                className="flex-1 h-9 rounded-lg bg-orange-600 text-white text-sm font-medium hover:bg-orange-700 disabled:opacity-50 transition-colors"
+              >
+                {usageSubmitting ? 'Registrando...' : 'Registrar uso'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Personal loan modal */}
       {lendModal.open && (

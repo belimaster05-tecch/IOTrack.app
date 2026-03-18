@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ChevronRight, Printer, CheckCircle2, ArrowRight, AlertCircle, Layers, Building2, Laptop, Palette, FlaskConical, Ruler, ScanLine, Plus, Trash2, X, CalendarDays, Clock3, History, Upload, FileText, BarChart3, Download, ExternalLink, UserRound, Info } from 'lucide-react';
+import { ChevronRight, Printer, CheckCircle2, ArrowRight, AlertCircle, Layers, Building2, Laptop, Palette, FlaskConical, Ruler, ScanLine, Plus, Trash2, X, CalendarDays, Clock3, History, Upload, FileText, BarChart3, Download, ExternalLink, UserRound, Info, ClipboardList } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
@@ -94,6 +94,61 @@ export function ResourceDetails() {
     );
     setNotesDraft(resource.condition_notes || '');
   }, [resource?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Quick usage log modal
+  const [usageModalOpen, setUsageModalOpen] = useState(false);
+  const [usageUnits, setUsageUnits] = useState<any[]>([]);
+  const [usageUnitId, setUsageUnitId] = useState('');
+  const [usageQuantity, setUsageQuantity] = useState('1');
+  const [usageStartDate, setUsageStartDate] = useState('');
+  const [usageDueDate, setUsageDueDate] = useState('');
+  const [usageNotes, setUsageNotes] = useState('');
+  const [usageSubmitting, setUsageSubmitting] = useState(false);
+
+  const openUsageModal = async () => {
+    setUsageUnitId('');
+    setUsageQuantity('1');
+    setUsageStartDate(new Date().toISOString().split('T')[0]);
+    setUsageDueDate('');
+    setUsageNotes('');
+    const { data } = await supabase
+      .from('resource_units')
+      .select('id, serial_number')
+      .eq('resource_id', id!)
+      .eq('status', 'available');
+    setUsageUnits(data ?? []);
+    if (data?.length === 1) setUsageUnitId(data[0].id);
+    setUsageModalOpen(true);
+  };
+
+  const handleSubmitUsage = async () => {
+    if (!user?.id || !id) return;
+    setUsageSubmitting(true);
+    try {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      const orgId = (authUser as any)?.user_metadata?.organization_id
+        ?? resource?.organization_id ?? null;
+      const qty = parseInt(usageQuantity) || 1;
+      const { error } = await supabase.from('loans').insert({
+        resource_id: id,
+        unit_id: usageUnitId || null,
+        user_id: user.id,
+        source: 'quick_log',
+        start_date: usageStartDate,
+        due_date: usageDueDate || null,
+        status: 'active',
+        notes: [usageNotes, qty > 1 ? `Cantidad: ${qty}` : ''].filter(Boolean).join(' · ') || null,
+        organization_id: resource?.organization_id ?? null,
+      });
+      if (error) throw error;
+      toast.success('Uso registrado');
+      setUsageModalOpen(false);
+    } catch (err: any) {
+      toast.error('Error: ' + err.message);
+    } finally {
+      setUsageSubmitting(false);
+    }
+  };
 
   const [resourceActivity, setResourceActivity] = useState<any[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -643,6 +698,14 @@ export function ResourceDetails() {
                   {visibilityLoading ? 'Publicando...' : 'Hacer público'}
                 </Button>
               )}
+              <button
+                type="button"
+                onClick={openUsageModal}
+                className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm text-gray-600 dark:text-[#AAAAAA] hover:bg-black/[0.04] dark:hover:bg-white/[0.05] transition-colors"
+              >
+                <ClipboardList className="h-4 w-4" />
+                Registrar uso
+              </button>
               <Button
                 variant="primary"
                 className="bg-black text-white hover:bg-gray-800"
@@ -1674,6 +1737,116 @@ export function ResourceDetails() {
                   {transferring ? 'Transfiriendo…' : 'Transferir'}
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick usage log modal */}
+      {usageModalOpen && resource && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#242424] rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-[#E8E8E6]">Registrar uso</h2>
+                <p className="text-sm text-gray-500 dark:text-[#787774] mt-0.5 truncate max-w-[280px]">{resource.name}</p>
+              </div>
+              <button type="button" onClick={() => setUsageModalOpen(false)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-[#AAAAAA]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Unit picker */}
+              {usageUnits.length > 1 && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Unidad (opcional)</label>
+                  <select
+                    value={usageUnitId}
+                    onChange={(e) => setUsageUnitId(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none"
+                  >
+                    <option value="">Sin especificar</option>
+                    {usageUnits.map((u) => (
+                      <option key={u.id} value={u.id}>{u.serial_number || u.id.slice(0, 8)}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {usageUnits.length === 1 && (
+                <p className="text-xs text-gray-500 dark:text-[#787774] bg-gray-50 dark:bg-[#1D1D1D] px-3 py-2 rounded-lg">
+                  Unidad: <span className="font-mono font-semibold">{usageUnits[0].serial_number || usageUnits[0].id.slice(0, 8)}</span>
+                </p>
+              )}
+
+              {/* Quantity — only when no unit selected */}
+              {!usageUnitId && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Cantidad</label>
+                  <input
+                    type="number" min="1"
+                    value={usageQuantity}
+                    onChange={(e) => setUsageQuantity(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">Fecha de toma *</label>
+                  <input
+                    type="date"
+                    value={usageStartDate}
+                    onChange={(e) => setUsageStartDate(e.target.value)}
+                    max={new Date().toISOString().split('T')[0]}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">
+                    Devolución est. <span className="text-gray-400 font-normal">(opc.)</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={usageDueDate}
+                    onChange={(e) => setUsageDueDate(e.target.value)}
+                    min={usageStartDate}
+                    className="w-full h-9 px-3 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-gray-700 dark:text-[#C8C8C6] block mb-1">
+                  Notas <span className="text-gray-400 font-normal">(opc.)</span>
+                </label>
+                <textarea
+                  value={usageNotes}
+                  onChange={(e) => setUsageNotes(e.target.value)}
+                  placeholder="Motivo, proyecto, ubicación..."
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-[#333] bg-white dark:bg-[#1D1D1D] text-sm text-gray-900 dark:text-[#E8E8E6] placeholder-gray-400 dark:placeholder-[#555] focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setUsageModalOpen(false)}
+                className="flex-1 h-9 rounded-lg border border-gray-200 dark:border-[#333] text-sm text-gray-600 dark:text-[#AAAAAA] hover:bg-gray-100 dark:hover:bg-[#2A2A2A] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitUsage}
+                disabled={!usageStartDate || usageSubmitting}
+                className="flex-1 h-9 rounded-lg bg-orange-600 text-white text-sm font-medium hover:bg-orange-700 disabled:opacity-50 transition-colors"
+              >
+                {usageSubmitting ? 'Registrando...' : 'Registrar uso'}
+              </button>
             </div>
           </div>
         </div>
